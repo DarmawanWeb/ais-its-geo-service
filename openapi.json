@@ -1,0 +1,1345 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/api/v2/zones": {
+      "get": {
+        "description": "Page-based list without geometries (use GET /zones/:id or /zones/geojson). bbox matches zones whose geometry intersects the box in lon/lat.",
+        "operationId": "ZonesController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "bbox",
+            "required": false,
+            "in": "query",
+            "description": "minLon,minLat,maxLon,maxLat (WGS 84 degrees)",
+            "schema": {
+              "example": "95,-11,141,6",
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "description": "One or more kinds, repeated (kind=a&kind=b) or comma separated",
+            "schema": {
+              "example": [
+                "pipeline"
+              ],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "pipeline",
+                  "transhipment_area",
+                  "fishing_ground",
+                  "mpa",
+                  "restricted",
+                  "anchorage",
+                  "port",
+                  "tss_lane",
+                  "shallow_water",
+                  "custom"
+                ]
+              }
+            }
+          },
+          {
+            "name": "orgId",
+            "required": false,
+            "in": "query",
+            "description": "Zones owned by this organization (authority and super_admin: any; others: their own)",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "active",
+            "required": false,
+            "in": "query",
+            "description": "Only active (true) or inactive (false) zones; both when absent",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Case-insensitive substring of the code or the name",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ZoneSummaryDto"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMetaDto"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List zones (global + own organization; authority/super_admin: all)",
+        "tags": [
+          "zones"
+        ],
+        "x-required-permissions": [
+          "zone:read"
+        ]
+      },
+      "post": {
+        "operationId": "ZonesController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateZoneDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZoneDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a zone (global: super_admin/authority; else in the active organization)",
+        "tags": [
+          "zones"
+        ],
+        "x-required-permissions": [
+          "zone:write"
+        ]
+      }
+    },
+    "/api/v2/zones/geojson": {
+      "get": {
+        "description": "Organization zones reach the map only here (the Martin tiles serve global zones). Active zones by default; coordinates rounded to 6 decimals.",
+        "operationId": "ZonesController_geojson",
+        "parameters": [
+          {
+            "name": "bbox",
+            "required": false,
+            "in": "query",
+            "description": "minLon,minLat,maxLon,maxLat (WGS 84 degrees)",
+            "schema": {
+              "example": "95,-11,141,6",
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "description": "One or more kinds, repeated (kind=a&kind=b) or comma separated",
+            "schema": {
+              "example": [
+                "pipeline"
+              ],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "pipeline",
+                  "transhipment_area",
+                  "fishing_ground",
+                  "mpa",
+                  "restricted",
+                  "anchorage",
+                  "port",
+                  "tss_lane",
+                  "shallow_water",
+                  "custom"
+                ]
+              }
+            }
+          },
+          {
+            "name": "orgId",
+            "required": false,
+            "in": "query",
+            "description": "Zones owned by this organization (authority and super_admin: any; others: their own)",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "active",
+            "required": false,
+            "in": "query",
+            "description": "Active zones only (default, what detectors use); false = inactive zones only",
+            "schema": {
+              "default": true,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/geo+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZoneFeatureCollectionDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Visible zones as a GeoJSON FeatureCollection for the web map",
+        "tags": [
+          "zones"
+        ],
+        "x-required-permissions": [
+          "zone:read"
+        ]
+      }
+    },
+    "/api/v2/zones/republish": {
+      "post": {
+        "description": "Enqueues one geo.zone.upserted.v1 per zone in the outbox; the relay publishes them asynchronously.",
+        "operationId": "ZonesController_republish",
+        "parameters": [],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepublishResultDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Republish the snapshot of every zone to the GEO stream (super_admin)",
+        "tags": [
+          "zones"
+        ],
+        "x-required-permissions": [
+          "zone:write"
+        ]
+      }
+    },
+    "/api/v2/zones/{id}": {
+      "get": {
+        "operationId": "ZonesController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZoneDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get a zone with its geometry",
+        "tags": [
+          "zones"
+        ],
+        "x-required-permissions": [
+          "zone:read"
+        ]
+      },
+      "patch": {
+        "operationId": "ZonesController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateZoneDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZoneDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Change a zone (geometry re-validated)",
+        "tags": [
+          "zones"
+        ],
+        "x-required-permissions": [
+          "zone:write"
+        ]
+      },
+      "delete": {
+        "operationId": "ZonesController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "default": {
+            "description": "Problem details (RFC 9457)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete a zone and publish its tombstone",
+        "tags": [
+          "zones"
+        ],
+        "x-required-permissions": [
+          "zone:write"
+        ]
+      }
+    },
+    "/api/v2/zones/methodology": {
+      "get": {
+        "operationId": "MethodologyController_describe",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MethodologyDto"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Methods implemented by this service, with their sources",
+        "tags": [
+          "methodology"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "AIS Maritime Intelligence — AIS ITS Geo Service",
+    "description": "Zones and geofences registry: validated GeoJSON zones, map layers and the GEO zone snapshot stream",
+    "version": "0.1.0",
+    "contact": {}
+  },
+  "tags": [
+    {
+      "name": "zones",
+      "description": "Zones and geofences: global zones and organization zones, GeoJSON in WGS84, map layer, GEO stream republication"
+    },
+    {
+      "name": "methodology",
+      "description": "Methods of the methodology catalog implemented here"
+    }
+  ],
+  "servers": [],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http",
+        "description": "Access token (EdDSA JWT)"
+      },
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "API key sk_<id>_<secret>"
+      },
+      "internalToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Internal-Token",
+        "description": "Service-to-service token"
+      }
+    },
+    "schemas": {
+      "ZoneSummaryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Owning organization; null = global zone"
+          },
+          "global": {
+            "type": "boolean",
+            "description": "true when orgId is null (shared by every tenant)"
+          },
+          "code": {
+            "type": "string",
+            "example": "mvp-pipeline"
+          },
+          "name": {
+            "type": "string",
+            "example": "Subsea pipeline (MVP dataset)"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pipeline",
+              "transhipment_area",
+              "fishing_ground",
+              "mpa",
+              "restricted",
+              "anchorage",
+              "port",
+              "tss_lane",
+              "shallow_water",
+              "custom"
+            ]
+          },
+          "bufferM": {
+            "type": "number",
+            "description": "Buffer around the geometry, meters",
+            "example": 1750
+          },
+          "alertOnEnter": {
+            "type": "boolean"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Kind-specific properties (contracts ZONE_PROPERTY_SCHEMAS)"
+          },
+          "source": {
+            "type": "string",
+            "nullable": true,
+            "description": "Provenance of the geometry"
+          },
+          "createdBy": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Creating user; null for seeds"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "geometryType": {
+            "type": "string",
+            "enum": [
+              "Point",
+              "MultiPoint",
+              "LineString",
+              "MultiLineString",
+              "Polygon",
+              "MultiPolygon",
+              "GeometryCollection"
+            ]
+          },
+          "vertexCount": {
+            "type": "number",
+            "description": "Number of positions, ring closures included"
+          },
+          "bbox": {
+            "minItems": 4,
+            "maxItems": 4,
+            "description": "[minLon, minLat, maxLon, maxLat] of the geometry",
+            "example": [
+              112.651,
+              -7.144,
+              112.719,
+              -6.854
+            ],
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "orgId",
+          "global",
+          "code",
+          "name",
+          "kind",
+          "bufferM",
+          "alertOnEnter",
+          "active",
+          "properties",
+          "source",
+          "createdBy",
+          "createdAt",
+          "updatedAt",
+          "geometryType",
+          "vertexCount",
+          "bbox"
+        ]
+      },
+      "PageMetaDto": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "pageSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of items across all pages"
+          }
+        },
+        "required": [
+          "page",
+          "pageSize",
+          "total"
+        ]
+      },
+      "GeoJsonGeometryDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "Point",
+              "MultiPoint",
+              "LineString",
+              "MultiLineString",
+              "Polygon",
+              "MultiPolygon",
+              "GeometryCollection"
+            ],
+            "example": "Polygon"
+          },
+          "coordinates": {
+            "type": "array",
+            "items": {},
+            "description": "Positions [longitude, latitude] (WGS84 degrees) nested as the geometry type requires; absent for GeometryCollection. A third coordinate (altitude) is dropped: zones are 2-D.",
+            "example": [
+              [
+                [
+                  104,
+                  1
+                ],
+                [
+                  104.1,
+                  1
+                ],
+                [
+                  104.1,
+                  1.1
+                ],
+                [
+                  104,
+                  1.1
+                ],
+                [
+                  104,
+                  1
+                ]
+              ]
+            ]
+          },
+          "geometries": {
+            "description": "Members of a GeometryCollection (no nested collections)",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GeoJsonGeometryDto"
+            }
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "ZoneFeaturePropertiesDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "global": {
+            "type": "boolean"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pipeline",
+              "transhipment_area",
+              "fishing_ground",
+              "mpa",
+              "restricted",
+              "anchorage",
+              "port",
+              "tss_lane",
+              "shallow_water",
+              "custom"
+            ]
+          },
+          "bufferM": {
+            "type": "number",
+            "description": "meters"
+          },
+          "alertOnEnter": {
+            "type": "boolean"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "zoneProperties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Kind-specific properties with the provenance (source), e.g. the pipeline KP markers"
+          }
+        },
+        "required": [
+          "id",
+          "orgId",
+          "global",
+          "code",
+          "name",
+          "kind",
+          "bufferM",
+          "alertOnEnter",
+          "active",
+          "updatedAt",
+          "zoneProperties"
+        ]
+      },
+      "ZoneFeatureDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "Feature"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The zone id"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/GeoJsonGeometryDto"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/ZoneFeaturePropertiesDto"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "geometry",
+          "properties"
+        ]
+      },
+      "ZoneFeatureCollectionDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "FeatureCollection"
+            ]
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ZoneFeatureDto"
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "true when more zones matched than `limit` (narrow the bbox or the kinds)"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Largest number of features of one response"
+          }
+        },
+        "required": [
+          "type",
+          "features",
+          "truncated",
+          "limit"
+        ]
+      },
+      "RepublishResultDto": {
+        "type": "object",
+        "properties": {
+          "enqueued": {
+            "type": "number",
+            "description": "Zone snapshots enqueued in the outbox"
+          }
+        },
+        "required": [
+          "enqueued"
+        ]
+      },
+      "ZoneDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Owning organization; null = global zone"
+          },
+          "global": {
+            "type": "boolean",
+            "description": "true when orgId is null (shared by every tenant)"
+          },
+          "code": {
+            "type": "string",
+            "example": "mvp-pipeline"
+          },
+          "name": {
+            "type": "string",
+            "example": "Subsea pipeline (MVP dataset)"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pipeline",
+              "transhipment_area",
+              "fishing_ground",
+              "mpa",
+              "restricted",
+              "anchorage",
+              "port",
+              "tss_lane",
+              "shallow_water",
+              "custom"
+            ]
+          },
+          "bufferM": {
+            "type": "number",
+            "description": "Buffer around the geometry, meters",
+            "example": 1750
+          },
+          "alertOnEnter": {
+            "type": "boolean"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Kind-specific properties (contracts ZONE_PROPERTY_SCHEMAS)"
+          },
+          "source": {
+            "type": "string",
+            "nullable": true,
+            "description": "Provenance of the geometry"
+          },
+          "createdBy": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Creating user; null for seeds"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "geometryType": {
+            "type": "string",
+            "enum": [
+              "Point",
+              "MultiPoint",
+              "LineString",
+              "MultiLineString",
+              "Polygon",
+              "MultiPolygon",
+              "GeometryCollection"
+            ]
+          },
+          "vertexCount": {
+            "type": "number",
+            "description": "Number of positions, ring closures included"
+          },
+          "bbox": {
+            "minItems": 4,
+            "maxItems": 4,
+            "description": "[minLon, minLat, maxLon, maxLat] of the geometry",
+            "example": [
+              112.651,
+              -7.144,
+              112.719,
+              -6.854
+            ],
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/GeoJsonGeometryDto"
+          }
+        },
+        "required": [
+          "id",
+          "orgId",
+          "global",
+          "code",
+          "name",
+          "kind",
+          "bufferM",
+          "alertOnEnter",
+          "active",
+          "properties",
+          "source",
+          "createdBy",
+          "createdAt",
+          "updatedAt",
+          "geometryType",
+          "vertexCount",
+          "bbox",
+          "geometry"
+        ]
+      },
+      "CreateZoneDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable code, unique among the global zones or within the organization; never changes",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+            "example": "idbtm-anchorage-a"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "example": "Batam anchorage A"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pipeline",
+              "transhipment_area",
+              "fishing_ground",
+              "mpa",
+              "restricted",
+              "anchorage",
+              "port",
+              "tss_lane",
+              "shallow_water",
+              "custom"
+            ],
+            "example": "anchorage"
+          },
+          "geometry": {
+            "description": "GeoJSON geometry in WGS84 degrees: the geometry type must fit the kind (pipeline: lines; transhipment_area, fishing_ground, mpa, shallow_water: polygons; restricted, anchorage, port: polygons or points with bufferM > 0; tss_lane: polygons or lines; custom: any), at most 50000 vertices, valid per PostGIS ST_IsValid (never repaired automatically)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GeoJsonGeometryDto"
+              }
+            ]
+          },
+          "bufferM": {
+            "type": "number",
+            "description": "Buffer around the geometry, meters",
+            "minimum": 0,
+            "maximum": 100000,
+            "default": 0,
+            "example": 500
+          },
+          "alertOnEnter": {
+            "type": "boolean",
+            "description": "Raise geofence alerts when a vessel enters the zone",
+            "default": false
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Inactive zones are kept but ignored by detectors and tiles",
+            "default": true
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Kind-specific properties (contracts ZONE_PROPERTY_SCHEMAS), e.g. pipeline markers [{ name, lat, lon }], shallow_water depthM, port unlocode; unknown keys are kept; at most 64 KiB; \"source\" is reserved",
+            "example": {
+              "note": "Designated by the harbour master"
+            }
+          },
+          "source": {
+            "type": "string",
+            "description": "Provenance of the geometry (dataset, survey, regulation)",
+            "maxLength": 500,
+            "example": "KSOP Batam notice 12/2026"
+          },
+          "global": {
+            "type": "boolean",
+            "description": "true = global zone shared by every organization (super_admin and authority only); false = zone of the active organization",
+            "default": false
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "kind",
+          "geometry"
+        ]
+      },
+      "UpdateZoneDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "example": "Batam anchorage A"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pipeline",
+              "transhipment_area",
+              "fishing_ground",
+              "mpa",
+              "restricted",
+              "anchorage",
+              "port",
+              "tss_lane",
+              "shallow_water",
+              "custom"
+            ],
+            "example": "anchorage"
+          },
+          "geometry": {
+            "description": "GeoJSON geometry in WGS84 degrees: the geometry type must fit the kind (pipeline: lines; transhipment_area, fishing_ground, mpa, shallow_water: polygons; restricted, anchorage, port: polygons or points with bufferM > 0; tss_lane: polygons or lines; custom: any), at most 50000 vertices, valid per PostGIS ST_IsValid (never repaired automatically)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GeoJsonGeometryDto"
+              }
+            ]
+          },
+          "bufferM": {
+            "type": "number",
+            "description": "Buffer around the geometry, meters",
+            "minimum": 0,
+            "maximum": 100000,
+            "default": 0,
+            "example": 500
+          },
+          "alertOnEnter": {
+            "type": "boolean",
+            "description": "Raise geofence alerts when a vessel enters the zone",
+            "default": false
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Inactive zones are kept but ignored by detectors and tiles",
+            "default": true
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Kind-specific properties (contracts ZONE_PROPERTY_SCHEMAS), e.g. pipeline markers [{ name, lat, lon }], shallow_water depthM, port unlocode; unknown keys are kept; at most 64 KiB; \"source\" is reserved",
+            "example": {
+              "note": "Designated by the harbour master"
+            }
+          },
+          "source": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 500,
+            "description": "Provenance of the geometry; null clears it"
+          }
+        }
+      },
+      "LocalizedTextDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Bahasa Indonesia"
+          },
+          "en": {
+            "type": "string",
+            "description": "English"
+          }
+        },
+        "required": [
+          "id",
+          "en"
+        ]
+      },
+      "MethodReferenceDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "imo-mepc-352-78"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "nullable": true,
+            "format": "uri"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "url"
+        ]
+      },
+      "MethodSummaryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "cii.attained"
+          },
+          "catalogued": {
+            "type": "boolean",
+            "description": "Whether the catalog shipped with @darmawanweb/ais-its-contracts describes the method"
+          },
+          "domain": {
+            "type": "string",
+            "enum": [
+              "ais",
+              "emission",
+              "seemp",
+              "telemetry",
+              "geo",
+              "safety",
+              "surveillance"
+            ],
+            "nullable": true
+          },
+          "name": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalizedTextDto"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "implemented",
+              "planned",
+              "deprecated"
+            ],
+            "nullable": true
+          },
+          "needsCitation": {
+            "type": "boolean",
+            "description": "Values come from the thesis without a verified external source"
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MethodReferenceDto"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "catalogued",
+          "domain",
+          "name",
+          "status",
+          "needsCitation",
+          "references"
+        ]
+      },
+      "MethodologyDto": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string",
+            "example": "geo"
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MethodSummaryDto"
+            }
+          }
+        },
+        "required": [
+          "service",
+          "methods"
+        ]
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Problem type URI"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "description": "Request path",
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$",
+            "description": "Stable UPPER_SNAKE_CASE error code"
+          },
+          "traceId": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Dot separated path, e.g. \"positions.0.lat\""
+                },
+                "message": {
+                  "type": "string"
+                },
+                "code": {
+                  "description": "Machine readable reason",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field",
+                "message"
+              ],
+              "additionalProperties": false,
+              "description": "Field-level validation error"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "additionalProperties": {},
+        "description": "RFC 9457 problem details"
+      }
+    }
+  },
+  "security": [
+    {
+      "bearer": []
+    }
+  ]
+}
