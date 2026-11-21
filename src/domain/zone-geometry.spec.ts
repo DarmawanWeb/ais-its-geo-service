@@ -1,4 +1,7 @@
-import { ZONE_KINDS, ZONE_MAX_VERTICES } from '@darmawanweb/ais-its-contracts/domain';
+import {
+  ZONE_KINDS,
+  ZONE_MAX_VERTICES,
+} from '@darmawanweb/ais-its-contracts/domain';
 import { ValidationFailedError } from '@darmawanweb/ais-its-nest';
 import { describe, expect, it } from 'vitest';
 
@@ -136,7 +139,9 @@ describe('parseZoneGeometry', () => {
         message: expect.stringContaining('closed') as string,
       },
     ]);
-    expect(fieldErrors({ type: 'LineString', coordinates: [[104, 1]] })).toEqual([
+    expect(
+      fieldErrors({ type: 'LineString', coordinates: [[104, 1]] }),
+    ).toEqual([
       {
         field: 'geometry.coordinates',
         message: expect.any(String) as string,
@@ -241,9 +246,9 @@ describe('geometry facts', () => {
   });
 
   it('computes the dimension and the bbox', () => {
-    expect(geometryDimension({ type: 'MultiPoint', coordinates: [[1, 2]] })).toBe(
-      0,
-    );
+    expect(
+      geometryDimension({ type: 'MultiPoint', coordinates: [[1, 2]] }),
+    ).toBe(0);
     expect(geometryDimension(LINE)).toBe(1);
     expect(
       geometryDimension({

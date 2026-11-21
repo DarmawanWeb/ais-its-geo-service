@@ -6,7 +6,7 @@ import { Module } from '@nestjs/common';
 
 import * as schema from './db/schema.js';
 import { MethodologyModule } from './modules/methodology/methodology.module.js';
-import { OutboxModule } from './modules/outbox/outbox.module.js';
+import { GeoOutboxModule } from './modules/outbox/outbox.module.js';
 import { SeedModule } from './modules/seed/seed.module.js';
 import { ZonesModule } from './modules/zones/zones.module.js';
 
@@ -28,7 +28,7 @@ import { ZonesModule } from './modules/zones/zones.module.js';
     AuthModule.forRoot({ apiKeys: false }),
     // Builds the audit.recorded.v1 records (written through the outbox).
     AuditModule,
-    OutboxModule,
+    GeoOutboxModule,
     ZonesModule,
     SeedModule,
     MethodologyModule,

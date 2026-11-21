@@ -44,7 +44,8 @@ export function ownerOfNewZone(
   global: boolean,
 ): string | null {
   if (global) {
-    if (!hasAuthorityAccess(principal)) throw new GlobalZoneWriteForbiddenError();
+    if (!hasAuthorityAccess(principal))
+      throw new GlobalZoneWriteForbiddenError();
     return null;
   }
   if (principal.orgId === null) throw new OrganizationRequiredError();
@@ -63,11 +64,13 @@ export function assertZoneWritable(
   zone: Pick<Zone, 'id' | 'orgId'>,
 ): void {
   if (zone.orgId === null) {
-    if (!hasAuthorityAccess(principal)) throw new GlobalZoneWriteForbiddenError();
+    if (!hasAuthorityAccess(principal))
+      throw new GlobalZoneWriteForbiddenError();
     return;
   }
   if (isPlatformAdmin(principal)) return;
-  if (principal.orgId !== zone.orgId) throw new ZoneWriteForbiddenError(zone.id);
+  if (principal.orgId !== zone.orgId)
+    throw new ZoneWriteForbiddenError(zone.id);
 }
 
 /**

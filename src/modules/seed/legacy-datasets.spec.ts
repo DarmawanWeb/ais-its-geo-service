@@ -76,9 +76,9 @@ describe('pipelineSeedZone (data.pipeline_route)', () => {
       'KP 26.700',
       'KP 30.200',
     ]);
-    expect(markers.filter((marker) => marker.name === 'KP 42.200')).toHaveLength(
-      2,
-    );
+    expect(
+      markers.filter((marker) => marker.name === 'KP 42.200'),
+    ).toHaveLength(2);
     expect(markers[0]).toEqual({
       name: 'KP 29.200',
       lat: -6.87197219605424,
@@ -101,7 +101,10 @@ describe('pipelineSeedZone (data.pipeline_route)', () => {
 });
 
 describe('batamSeedZone (data.batam_area)', () => {
-  const { zone, repairInvalidGeometry } = batamSeedZone(load(BATAM.path), BATAM);
+  const { zone, repairInvalidGeometry } = batamSeedZone(
+    load(BATAM.path),
+    BATAM,
+  );
 
   it('is the global transhipment area of the legacy MultiPolygon', () => {
     expect(zone).toMatchObject({

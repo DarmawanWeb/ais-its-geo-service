@@ -11,4 +11,4 @@ import { GeoOutboxRelay } from './geo-outbox.relay.js';
   providers: [GeoOutboxRelay],
   exports: [GeoOutboxRelay],
 })
-export class OutboxModule {}
+export class GeoOutboxModule {}

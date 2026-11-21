@@ -1,4 +1,7 @@
-import { ZONE_KINDS, type ZoneKind } from '@darmawanweb/ais-its-contracts/domain';
+import {
+  ZONE_KINDS,
+  type ZoneKind,
+} from '@darmawanweb/ais-its-contracts/domain';
 import { ApiProperty } from '@nestjs/swagger';
 
 import type { ZoneGeometry } from '../../../domain/zone-geometry.js';

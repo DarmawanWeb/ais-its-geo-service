@@ -42,8 +42,16 @@ describe('zone queries', () => {
     await service.reset();
     const zones = [
       // Singapore Strait / Batam
-      { code: 'q-batam-anchorage', kind: 'anchorage', geometry: square(104.0, 1.1) },
-      { code: 'q-batam-restricted', kind: 'restricted', geometry: square(103.8, 1.0, 0.05) },
+      {
+        code: 'q-batam-anchorage',
+        kind: 'anchorage',
+        geometry: square(104.0, 1.1),
+      },
+      {
+        code: 'q-batam-restricted',
+        kind: 'restricted',
+        geometry: square(103.8, 1.0, 0.05),
+      },
       // Gresik / Surabaya
       {
         code: 'q-gresik-pipeline',
@@ -57,7 +65,12 @@ describe('zone queries', () => {
         },
         bufferM: 1750,
       },
-      { code: 'q-surabaya-port', kind: 'port', geometry: square(112.7, -7.2, 0.05), active: false },
+      {
+        code: 'q-surabaya-port',
+        kind: 'port',
+        geometry: square(112.7, -7.2, 0.05),
+        active: false,
+      },
       // Crosses the edge of the Batam bbox below (lon 104.45–104.55).
       { code: 'q-edge-mpa', kind: 'mpa', geometry: square(104.45, 1.0) },
     ];
@@ -114,9 +127,13 @@ describe('zone queries', () => {
   });
 
   it('pages the summaries without geometries', async () => {
-    const response = await service.request('GET', `${ZONES}?page=2&pageSize=2`, {
-      user: USERS.superAdmin,
-    });
+    const response = await service.request(
+      'GET',
+      `${ZONES}?page=2&pageSize=2`,
+      {
+        user: USERS.superAdmin,
+      },
+    );
     const page = response.json<{
       data: Record<string, unknown>[];
       meta: { page: number; pageSize: number; total: number };

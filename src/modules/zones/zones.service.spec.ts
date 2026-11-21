@@ -7,10 +7,7 @@ import {
   type EventType,
 } from '@darmawanweb/ais-its-contracts/events';
 import { APP_CONFIG } from '@darmawanweb/ais-its-nest';
-import {
-  type AuditEntry,
-  AuditService,
-} from '@darmawanweb/ais-its-nest/audit';
+import { type AuditEntry, AuditService } from '@darmawanweb/ais-its-nest/audit';
 import { type Principal, UserPrincipal } from '@darmawanweb/ais-its-nest/auth';
 import { MetricsService } from '@darmawanweb/ais-its-nest/metrics';
 import { Test } from '@nestjs/testing';
@@ -247,11 +244,20 @@ describe('ZonesService', () => {
   });
 
   function createInput(code: string, global = false) {
-    return { code, name: `Zone ${code}`, kind: 'restricted' as const, geometry: SQUARE, global };
+    return {
+      code,
+      name: `Zone ${code}`,
+      kind: 'restricted' as const,
+      geometry: SQUARE,
+      global,
+    };
   }
 
   it('creates an organization zone with its snapshot and audit record in the outbox', async () => {
-    const zone = await service.create(createInput('a-1'), user(ORG_A, 'org_admin'));
+    const zone = await service.create(
+      createInput('a-1'),
+      user(ORG_A, 'org_admin'),
+    );
 
     expect(zone).toMatchObject({
       orgId: ORG_A,
@@ -321,13 +327,20 @@ describe('ZonesService', () => {
   });
 
   it('hides organization zones from other organizations', async () => {
-    const zone = await service.create(createInput('private'), user(ORG_A, 'org_admin'));
+    const zone = await service.create(
+      createInput('private'),
+      user(ORG_A, 'org_admin'),
+    );
 
-    await expect(service.get(zone.id, user(ORG_B, 'viewer'))).rejects.toMatchObject({
+    await expect(
+      service.get(zone.id, user(ORG_B, 'viewer')),
+    ).rejects.toMatchObject({
       code: 'ZONE_NOT_FOUND',
       status: 404,
     });
-    await expect(service.get(zone.id, user(ORG_B, 'authority'))).resolves.toMatchObject({
+    await expect(
+      service.get(zone.id, user(ORG_B, 'authority')),
+    ).resolves.toMatchObject({
       id: zone.id,
     });
     const page = await service.list({}, PAGE, user(ORG_B, 'viewer'));
@@ -338,7 +351,10 @@ describe('ZonesService', () => {
   });
 
   it('ignores an update that changes nothing (no event)', async () => {
-    const zone = await service.create(createInput('same'), user(ORG_A, 'org_admin'));
+    const zone = await service.create(
+      createInput('same'),
+      user(ORG_A, 'org_admin'),
+    );
     const outbox = repository.outbox.length;
 
     const unchanged = await service.update(
@@ -351,14 +367,21 @@ describe('ZonesService', () => {
   });
 
   it('publishes a new snapshot and audits the changed fields', async () => {
-    const zone = await service.create(createInput('change'), user(ORG_A, 'org_admin'));
+    const zone = await service.create(
+      createInput('change'),
+      user(ORG_A, 'org_admin'),
+    );
 
     const updated = await service.update(
       zone.id,
       { name: 'Renamed', bufferM: 250, source: 'Survey 2026' },
       user(ORG_A, 'org_admin'),
     );
-    expect(updated).toMatchObject({ name: 'Renamed', bufferM: 250, source: 'Survey 2026' });
+    expect(updated).toMatchObject({
+      name: 'Renamed',
+      bufferM: 250,
+      source: 'Survey 2026',
+    });
     expect(repository.outbox.at(-2)).toMatchObject({
       type: EVENT_TYPES.GEO_ZONE_UPSERTED,
       data: { name: 'Renamed', properties: { source: 'Survey 2026' } },
@@ -370,7 +393,10 @@ describe('ZonesService', () => {
   });
 
   it('re-validates the stored geometry when the kind changes', async () => {
-    const zone = await service.create(createInput('kind'), user(ORG_A, 'org_admin'));
+    const zone = await service.create(
+      createInput('kind'),
+      user(ORG_A, 'org_admin'),
+    );
 
     await expect(
       service.update(zone.id, { kind: 'pipeline' }, user(ORG_A, 'org_admin')),
@@ -379,8 +405,14 @@ describe('ZonesService', () => {
   });
 
   it('refuses changes of zones of another organization or of global zones', async () => {
-    const zone = await service.create(createInput('owned'), user(ORG_A, 'org_admin'));
-    const global = await service.create(createInput('shared', true), user(null, 'super_admin'));
+    const zone = await service.create(
+      createInput('owned'),
+      user(ORG_A, 'org_admin'),
+    );
+    const global = await service.create(
+      createInput('shared', true),
+      user(null, 'super_admin'),
+    );
 
     await expect(
       service.update(zone.id, { name: 'x' }, user(ORG_B, 'authority')),
@@ -391,18 +423,26 @@ describe('ZonesService', () => {
   });
 
   it('deletes a zone with a tombstone', async () => {
-    const zone = await service.create(createInput('gone'), user(ORG_A, 'org_admin'));
+    const zone = await service.create(
+      createInput('gone'),
+      user(ORG_A, 'org_admin'),
+    );
 
     await service.remove(zone.id, user(ORG_A, 'org_admin'));
     expect(repository.zones.has(zone.id)).toBe(false);
     expect(repository.outbox.slice(-2)).toEqual([
-      { type: EVENT_TYPES.GEO_ZONE_DELETED, data: { id: zone.id, orgId: ORG_A } },
+      {
+        type: EVENT_TYPES.GEO_ZONE_DELETED,
+        data: { id: zone.id, orgId: ORG_A },
+      },
       expect.objectContaining({
         type: EVENT_TYPES.AUDIT_RECORDED,
         data: expect.objectContaining({ action: 'zone.delete' }) as unknown,
       }),
     ]);
-    await expect(service.remove(zone.id, user(ORG_A, 'org_admin'))).rejects.toMatchObject({
+    await expect(
+      service.remove(zone.id, user(ORG_A, 'org_admin')),
+    ).rejects.toMatchObject({
       code: 'ZONE_NOT_FOUND',
     });
   });
@@ -412,7 +452,9 @@ describe('ZonesService', () => {
     await service.create(createInput('r-2', true), user(null, 'super_admin'));
     repository.outbox = [];
 
-    await expect(service.republish(user(ORG_A, 'authority'))).rejects.toMatchObject({
+    await expect(
+      service.republish(user(ORG_A, 'authority')),
+    ).rejects.toMatchObject({
       code: 'PLATFORM_ADMIN_REQUIRED',
       status: 403,
     });
@@ -462,7 +504,9 @@ describe('ZonesService', () => {
     });
     const outbox = repository.outbox.length;
 
-    await expect(service.applySeed(seed, 'insert-missing')).resolves.toMatchObject({
+    await expect(
+      service.applySeed(seed, 'insert-missing'),
+    ).resolves.toMatchObject({
       outcome: 'kept',
     });
     await expect(service.applySeed(seed, 'update')).resolves.toMatchObject({

@@ -1063,7 +1063,8 @@
           },
           "source": {
             "type": "string",
-            "description": "Provenance of the geometry (dataset, survey, regulation)",
+            "nullable": true,
+            "description": "Provenance of the geometry (dataset, survey, regulation); null or absent = unknown",
             "maxLength": 500,
             "example": "KSOP Batam notice 12/2026"
           },

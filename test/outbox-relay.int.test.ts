@@ -204,7 +204,12 @@ describe('GeoOutboxRelay', () => {
     // A row whose payload violates the contract (written around enqueueEvent).
     await service.pool.query(
       `INSERT INTO outbox (id, type, entity_key, data) VALUES ($1, $2, $3, $4::jsonb)`,
-      [poison, EVENT_TYPES.GEO_ZONE_UPSERTED, zone, JSON.stringify({ id: zone })],
+      [
+        poison,
+        EVENT_TYPES.GEO_ZONE_UPSERTED,
+        zone,
+        JSON.stringify({ id: zone }),
+      ],
     );
     await enqueue(zone, 2);
     const relay = relayWith(service.app.get(EventPublisher));
@@ -231,7 +236,11 @@ describe('GeoOutboxRelay', () => {
       for (const zone of zones) await enqueue(zone, version);
     }
     const publisher = new RecordingPublisher();
-    const relays = [relayWith(publisher, 3), relayWith(publisher, 3), relayWith(publisher, 3)];
+    const relays = [
+      relayWith(publisher, 3),
+      relayWith(publisher, 3),
+      relayWith(publisher, 3),
+    ];
 
     await Promise.all(
       relays.map(async (relay) => {

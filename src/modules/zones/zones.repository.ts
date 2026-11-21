@@ -368,7 +368,8 @@ export class ZoneUnitOfWork {
         createdBy: draft.createdBy,
       })
       .returning(zoneColumns());
-    if (row === undefined) throw new Error('INSERT … RETURNING returned no row');
+    if (row === undefined)
+      throw new Error('INSERT … RETURNING returned no row');
     return row;
   }
 
@@ -392,7 +393,8 @@ export class ZoneUnitOfWork {
       })
       .where(eq(zones.id, id))
       .returning(zoneColumns());
-    if (row === undefined) throw new Error(`UPDATE of zone ${id} matched no row`);
+    if (row === undefined)
+      throw new Error(`UPDATE of zone ${id} matched no row`);
     return row;
   }
 

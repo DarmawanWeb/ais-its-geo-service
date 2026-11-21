@@ -16,9 +16,9 @@ describe('isUniqueViolation', () => {
 
   it('looks through wrapping errors (drizzle DrizzleQueryError)', () => {
     const wrapped = new Error('Failed query', {
-      cause: driverError(PG_UNIQUE_VIOLATION, 'notes_org_mmsi_title_key'),
+      cause: driverError(PG_UNIQUE_VIOLATION, 'zones_org_code_key'),
     });
-    expect(isUniqueViolation(wrapped, 'notes_org_mmsi_title_key')).toBe(true);
+    expect(isUniqueViolation(wrapped, 'zones_org_code_key')).toBe(true);
   });
 
   it('checks the constraint name when given', () => {

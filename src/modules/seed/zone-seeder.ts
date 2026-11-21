@@ -72,7 +72,8 @@ export class ZoneSeeder {
         repaired,
       };
       this.logger.log(
-        `Seed zone ${result.code} (${dataset.path}): ${result.outcome}${repaired ? ', geometry repaired with ST_MakeValid' : ''}`,
+        { ...result, dataset: dataset.path },
+        `Seed zone ${result.code}: ${result.outcome}`,
       );
       results.push(result);
     }
@@ -95,7 +96,12 @@ export class ZoneSeeder {
     }
     const geometry = await this.zones.makeValidMultiPolygon(seed.zone.geometry);
     this.logger.warn(
-      `Seed zone ${seed.zone.code}: invalid dataset geometry (${validity.reason ?? 'invalid'}) repaired with ST_MakeValid`,
+      {
+        code: seed.zone.code,
+        reason: validity.reason,
+        location: validity.location,
+      },
+      'Invalid dataset geometry repaired explicitly with ST_MakeValid (recorded in properties.geometryRepair)',
     );
     return {
       repaired: true,

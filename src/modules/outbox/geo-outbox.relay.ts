@@ -281,7 +281,8 @@ export class GeoOutboxRelay
   ): Promise<void> {
     this.relayed.inc({ type: row.type, outcome: 'rejected' });
     this.logger.error(
-      `Outbox row ${row.id} (${row.type}) can never be published and is marked failed: ${errorText(error)}`,
+      { outboxId: row.id, eventType: row.type, error: errorText(error) },
+      'Outbox row can never be published: marked failed (kept for inspection)',
     );
     await client.query(
       'UPDATE outbox SET attempts = attempts + 1, last_error = $2, failed_at = clock_timestamp() WHERE id = $1',
@@ -301,7 +302,14 @@ export class GeoOutboxRelay
     });
     this.relayed.inc({ type: row.type, outcome: 'failed' });
     this.logger.warn(
-      `Publishing outbox row ${row.id} (${row.type}) failed (attempt ${attempts}), retrying in ${delayMs} ms: ${errorText(error)}`,
+      {
+        outboxId: row.id,
+        eventType: row.type,
+        attempts,
+        retryInMs: delayMs,
+        error: errorText(error),
+      },
+      'Publishing an outbox row failed: retrying after a backoff',
     );
     await client.query(
       "UPDATE outbox SET attempts = $2, last_error = $3, next_attempt_at = clock_timestamp() + $4 * interval '1 millisecond' WHERE id = $1",
@@ -334,7 +342,9 @@ export class GeoOutboxRelay
     if (Date.now() - this.lastCleanup < CLEANUP_INTERVAL_MS) return;
     this.lastCleanup = Date.now();
     const deleted = await this.cleanup();
-    if (deleted > 0) this.logger.debug(`Deleted ${deleted} published outbox rows`);
+    if (deleted > 0) {
+      this.logger.debug({ deleted }, 'Deleted published outbox rows');
+    }
   }
 
   /** Read through a method: the signal changes while the loop awaits. */
@@ -355,7 +365,10 @@ export class GeoOutboxRelay
         await this.maybeCleanup();
       } catch (error) {
         idleMs = Math.min(idleMs * 2, retryMaxMs);
-        this.logger.error(`Outbox relay pass failed: ${errorText(error)}`);
+        this.logger.error(
+          { error: errorText(error), retryInMs: idleMs },
+          'Outbox relay pass failed',
+        );
       }
       // Drain the backlog back to back (one row per ordering key per pass).
       if (progressed) continue;

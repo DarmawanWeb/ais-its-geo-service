@@ -50,9 +50,7 @@ describe('isPermanentPublishError', () => {
 
   it('recognises messages over the server max_payload', () => {
     expect(
-      isPermanentPublishError(
-        new Error("'payload' max_payload size exceeded"),
-      ),
+      isPermanentPublishError(new Error("'payload' max_payload size exceeded")),
     ).toBe(true);
   });
 

@@ -49,7 +49,7 @@ export const zones = serviceSchema.table(
   ],
 );
 
-/** Transactional outbox (`0001_init.sql`), published by `ZoneOutboxRelay`. */
+/** Transactional outbox (`0001_init.sql`), published by `GeoOutboxRelay`. */
 export const outbox = serviceSchema.table(
   'outbox',
   {

@@ -19,6 +19,7 @@ import {
 } from 'class-validator';
 
 import { trimString } from '../../../common/transforms.js';
+import { IsOptionalNotNull } from '../../../common/validation.js';
 import { GeoJsonGeometryDto } from './geojson-geometry.dto.js';
 
 /** Zone codes: lowercase slugs such as `mvp-pipeline` or `idbtm.anchorage-a`. */
@@ -66,7 +67,7 @@ export class CreateZoneDto {
     default: 0,
     example: 500,
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsNumber({ allowNaN: false, allowInfinity: false })
   @Min(0)
   @Max(MAX_BUFFER_M)
@@ -76,7 +77,7 @@ export class CreateZoneDto {
     description: 'Raise geofence alerts when a vessel enters the zone',
     default: false,
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   readonly alertOnEnter?: boolean;
 
@@ -84,7 +85,7 @@ export class CreateZoneDto {
     description: 'Inactive zones are kept but ignored by detectors and tiles',
     default: true,
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   readonly active?: boolean;
 
@@ -95,12 +96,15 @@ export class CreateZoneDto {
       'Kind-specific properties (contracts ZONE_PROPERTY_SCHEMAS), e.g. pipeline markers [{ name, lat, lon }], shallow_water depthM, port unlocode; unknown keys are kept; at most 64 KiB; "source" is reserved',
     example: { note: 'Designated by the harbour master' },
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsObject()
   readonly properties?: Record<string, unknown>;
 
   @ApiPropertyOptional({
-    description: 'Provenance of the geometry (dataset, survey, regulation)',
+    type: String,
+    nullable: true,
+    description:
+      'Provenance of the geometry (dataset, survey, regulation); null or absent = unknown',
     maxLength: 500,
     example: 'KSOP Batam notice 12/2026',
   })
@@ -108,14 +112,14 @@ export class CreateZoneDto {
   @Transform(trimString)
   @IsString()
   @Length(1, 500)
-  readonly source?: string;
+  readonly source?: string | null;
 
   @ApiPropertyOptional({
     description:
       'true = global zone shared by every organization (super_admin and authority only); false = zone of the active organization',
     default: false,
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   readonly global?: boolean;
 }

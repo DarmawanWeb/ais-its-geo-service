@@ -1,4 +1,7 @@
-import { ZONE_KINDS, type ZoneKind } from '@darmawanweb/ais-its-contracts/domain';
+import {
+  ZONE_KINDS,
+  type ZoneKind,
+} from '@darmawanweb/ais-its-contracts/domain';
 import { BBoxQueryDto, PageQueryDto } from '@darmawanweb/ais-its-nest/http';
 import { ApiPropertyOptional, IntersectionType } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
@@ -24,7 +27,8 @@ export class ZoneFilterQuery extends BBoxQueryDto {
   @ApiPropertyOptional({
     enum: ZONE_KINDS,
     isArray: true,
-    description: 'One or more kinds, repeated (kind=a&kind=b) or comma separated',
+    description:
+      'One or more kinds, repeated (kind=a&kind=b) or comma separated',
     example: ['pipeline'],
   })
   @IsOptional()
@@ -51,7 +55,8 @@ export class ListZonesQuery extends IntersectionType(
 ) {
   @ApiPropertyOptional({
     type: Boolean,
-    description: 'Only active (true) or inactive (false) zones; both when absent',
+    description:
+      'Only active (true) or inactive (false) zones; both when absent',
   })
   @IsOptional()
   @Transform(booleanQuery)

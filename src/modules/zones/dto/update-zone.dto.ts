@@ -1,8 +1,4 @@
-import {
-  ApiPropertyOptional,
-  OmitType,
-  PartialType,
-} from '@nestjs/swagger';
+import { ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsOptional, IsString, Length } from 'class-validator';
 
@@ -13,10 +9,12 @@ import { CreateZoneDto } from './create-zone.dto.js';
  * `PATCH /api/v2/zones/:id`: any subset of the create fields except the
  * code and the owner (a zone never moves between organizations; delete and
  * create instead). `properties` replaces the whole object; `source: null`
- * clears the provenance.
+ * clears the provenance. Every other field refuses `null`
+ * (`skipNullProperties: false`): its column is `NOT NULL`.
  */
 export class UpdateZoneDto extends PartialType(
   OmitType(CreateZoneDto, ['code', 'global', 'source'] as const),
+  { skipNullProperties: false },
 ) {
   @ApiPropertyOptional({
     type: String,

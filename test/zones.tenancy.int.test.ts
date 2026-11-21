@@ -63,13 +63,21 @@ describe('zones tenancy', () => {
   });
 
   it('stores global zones without an owner and org zones in the active organization', async () => {
-    const global = await service.request('GET', `${ZONES}/${ids['global-authority'] ?? ''}`, {
-      user: USERS.viewerA,
-    });
+    const global = await service.request(
+      'GET',
+      `${ZONES}/${ids['global-authority'] ?? ''}`,
+      {
+        user: USERS.viewerA,
+      },
+    );
     expect(global.json()).toMatchObject({ orgId: null, global: true });
-    const orgZone = await service.request('GET', `${ZONES}/${ids['org-a'] ?? ''}`, {
-      user: USERS.viewerA,
-    });
+    const orgZone = await service.request(
+      'GET',
+      `${ZONES}/${ids['org-a'] ?? ''}`,
+      {
+        user: USERS.viewerA,
+      },
+    );
     expect(orgZone.json()).toMatchObject({ orgId: ORG_A, global: false });
   });
 
@@ -115,9 +123,13 @@ describe('zones tenancy', () => {
   });
 
   it('hides other organizations: 404 on read, 403 on an owner filter', async () => {
-    const read = await service.request('GET', `${ZONES}/${ids['org-a'] ?? ''}`, {
-      user: USERS.viewerB,
-    });
+    const read = await service.request(
+      'GET',
+      `${ZONES}/${ids['org-a'] ?? ''}`,
+      {
+        user: USERS.viewerB,
+      },
+    );
     expect(read.statusCode).toBe(404);
     const filter = await service.request('GET', `${ZONES}?orgId=${ORG_A}`, {
       user: USERS.viewerB,
@@ -156,7 +168,10 @@ describe('zones tenancy', () => {
       body: { name: 'by super admin' },
     });
     expect(admin.statusCode).toBe(200);
-    expect(admin.json()).toMatchObject({ orgId: ORG_A, name: 'by super admin' });
+    expect(admin.json()).toMatchObject({
+      orgId: ORG_A,
+      name: 'by super admin',
+    });
   });
 
   it('lets only super_admin and authority change or delete global zones', async () => {

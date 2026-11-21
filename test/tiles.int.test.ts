@@ -89,7 +89,11 @@ describe('zones_tiles view', () => {
               has_schema_privilege('tiles_ro', $3, 'USAGE') AS usage`,
       [`${schema}.zones_tiles`, `${schema}.zones`, schema],
     );
-    expect(privileges.rows[0]).toEqual({ view: true, table: false, usage: true });
+    expect(privileges.rows[0]).toEqual({
+      view: true,
+      table: false,
+      usage: true,
+    });
 
     // Martin discovers the view through geometry_columns (SRID 4326).
     const columns = await admin.query<{ srid: number; type: string }>(

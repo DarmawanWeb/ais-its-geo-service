@@ -1,4 +1,7 @@
-import type { GeometryType, ZoneKind } from '@darmawanweb/ais-its-contracts/domain';
+import type {
+  GeometryType,
+  ZoneKind,
+} from '@darmawanweb/ais-its-contracts/domain';
 import {
   ConflictError,
   DomainError,

@@ -336,6 +336,40 @@ describe('zones CRUD and input validation', () => {
       body: { code: 'renamed' },
     });
     expect(immutable.statusCode).toBe(400);
+
+    // null is a value only for `source` (clears it); NOT NULL columns refuse it.
+    const nulls = await service.request('PATCH', `${ZONES}/${id}`, {
+      user: USERS.orgAdminA,
+      body: { name: null, bufferM: null, active: null, properties: null },
+    });
+    expect(nulls.statusCode).toBe(400);
+    expect(nulls.json<Problem>()).toMatchObject({ code: 'VALIDATION_FAILED' });
+    // One field error per failed constraint (bufferM: isNumber, min, max).
+    const fields = new Set(
+      nulls.json<Problem>().errors?.map((error) => error.field),
+    );
+    expect([...fields].sort()).toEqual([
+      'active',
+      'bufferM',
+      'name',
+      'properties',
+    ]);
+    const sourced = await service.request('PATCH', `${ZONES}/${id}`, {
+      user: USERS.orgAdminA,
+      body: { source: 'Harbour master survey 2026' },
+    });
+    expect(sourced.json()).toMatchObject({
+      source: 'Harbour master survey 2026',
+    });
+    const cleared = await service.request('PATCH', `${ZONES}/${id}`, {
+      user: USERS.orgAdminA,
+      body: { source: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json()).toMatchObject({
+      source: null,
+      name: moved.json<{ name: string }>().name,
+    });
   });
 
   it('requires a token and the zone permissions (401/403)', async () => {

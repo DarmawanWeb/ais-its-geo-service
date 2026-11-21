@@ -34,11 +34,7 @@ import type { FastifyRequest } from 'fastify';
 import { CreateZoneDto } from './dto/create-zone.dto.js';
 import { ListZonesQuery, ZoneGeoJsonQuery } from './dto/list-zones.query.js';
 import { UpdateZoneDto } from './dto/update-zone.dto.js';
-import {
-  RepublishResultDto,
-  ZoneDto,
-  ZoneSummaryDto,
-} from './dto/zone.dto.js';
+import { RepublishResultDto, ZoneDto, ZoneSummaryDto } from './dto/zone.dto.js';
 import { ZoneFeatureCollectionDto } from './dto/zone-feature-collection.dto.js';
 import { ZonesService } from './zones.service.js';
 
@@ -56,7 +52,8 @@ export class ZonesController {
   @Get()
   @RequirePermissions('zone:read')
   @ApiOperation({
-    summary: 'List zones (global + own organization; authority/super_admin: all)',
+    summary:
+      'List zones (global + own organization; authority/super_admin: all)',
     description:
       'Page-based list without geometries (use GET /zones/:id or /zones/geojson). bbox matches zones whose geometry intersects the box in lon/lat.',
   })
@@ -112,7 +109,8 @@ export class ZonesController {
   @HttpCode(HttpStatus.ACCEPTED)
   @RequirePermissions('zone:write')
   @ApiOperation({
-    summary: 'Republish the snapshot of every zone to the GEO stream (super_admin)',
+    summary:
+      'Republish the snapshot of every zone to the GEO stream (super_admin)',
     description:
       'Enqueues one geo.zone.upserted.v1 per zone in the outbox; the relay publishes them asynchronously.',
   })
@@ -140,7 +138,8 @@ export class ZonesController {
   @Post()
   @RequirePermissions('zone:write')
   @ApiOperation({
-    summary: 'Create a zone (global: super_admin/authority; else in the active organization)',
+    summary:
+      'Create a zone (global: super_admin/authority; else in the active organization)',
   })
   @ApiCreatedResponse({ type: ZoneDto })
   async create(
@@ -161,9 +160,7 @@ export class ZonesController {
     @CurrentPrincipal() principal: Principal,
     @Req() request: FastifyRequest,
   ): Promise<ZoneDto> {
-    return new ZoneDto(
-      await this.zones.update(id, body, principal, request),
-    );
+    return new ZoneDto(await this.zones.update(id, body, principal, request));
   }
 
   @Delete(':id')

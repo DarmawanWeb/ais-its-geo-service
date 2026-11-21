@@ -28,7 +28,9 @@ export class ZoneSummaryDto {
   })
   readonly orgId: string | null;
 
-  @ApiProperty({ description: 'true when orgId is null (shared by every tenant)' })
+  @ApiProperty({
+    description: 'true when orgId is null (shared by every tenant)',
+  })
   readonly global: boolean;
 
   @ApiProperty({ example: 'mvp-pipeline' })
@@ -40,7 +42,10 @@ export class ZoneSummaryDto {
   @ApiProperty({ enum: ZONE_KINDS })
   readonly kind: ZoneKind;
 
-  @ApiProperty({ description: 'Buffer around the geometry, meters', example: 1750 })
+  @ApiProperty({
+    description: 'Buffer around the geometry, meters',
+    example: 1750,
+  })
   readonly bufferM: number;
 
   @ApiProperty()

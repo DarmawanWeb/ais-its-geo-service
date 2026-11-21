@@ -30,7 +30,8 @@ export interface SeedZone {
 }
 
 /** Provenance note of the MVP datasets (spec §13.6). */
-export const MVP_DATASET_NOTE = 'MVP dataset, origin to be cited from the thesis';
+export const MVP_DATASET_NOTE =
+  'MVP dataset, origin to be cited from the thesis';
 
 /** Code of the pipeline seed zone. */
 export const PIPELINE_ZONE_CODE = 'mvp-pipeline';
@@ -44,10 +45,16 @@ export const BATAM_ZONE_CODE = 'mvp-batam-transhipment';
  * installations at sea), which is also the legacy frontend's outer buffer.
  * The EWS itself (safety service) keeps its own 500 m / 1 750 m thresholds.
  *
- * @see ews.pipeline_distance_status (constant d_warning), docs/METHODOLOGY.md §5.1
+ * Units: meters.
+ *
+ * @method data.pipeline_route (corridor buffer of the seed zone; the value is
+ *   the constant d_warning of ews.pipeline_distance_status, implemented by safety)
+ * @see docs/METHODOLOGY.md §5.1 (ews.pipeline_distance_status), §15.2 (data.pipeline_route)
  * @see https://peraturan.bpk.go.id/Details/161858/pp-no-27-tahun-2021 (PP 27/2021 Pasal 31(3))
  * @see https://migas.esdm.go.id/post/tumpahan-minyak-pipa-penyalur-minyak-pertamina-sesuai-standar
  */
+// SOURCE: thesis — needs citation (the 1 750 m EWS warning distance is marked
+// needsCitation in the catalog, see ews.pipeline_distance_status).
 export const PIPELINE_CORRIDOR_BUFFER_M = 1_750;
 
 /** Legacy `data/pipeline.json`: `{ pipeline: [{ Latitude, Longitude, Name }] }`. */

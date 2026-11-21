@@ -58,6 +58,28 @@ describe('CreateZoneDto', () => {
     ).toEqual({ bufferM: ['max'] });
   });
 
+  it('refuses null for fields without a null value, accepts a null source', async () => {
+    expect(
+      await errorsOf(CreateZoneDto, {
+        ...VALID,
+        bufferM: null,
+        alertOnEnter: null,
+        active: null,
+        properties: null,
+        global: null,
+      }),
+    ).toEqual({
+      bufferM: ['isNumber', 'max', 'min'],
+      alertOnEnter: ['isBoolean'],
+      active: ['isBoolean'],
+      properties: ['isObject'],
+      global: ['isBoolean'],
+    });
+    expect(await errorsOf(CreateZoneDto, { ...VALID, source: null })).toEqual(
+      {},
+    );
+  });
+
   it('never accepts an organization id from the client', async () => {
     expect(
       await errorsOf(CreateZoneDto, {
@@ -78,6 +100,34 @@ describe('UpdateZoneDto', () => {
     expect(await errorsOf(UpdateZoneDto, { global: true })).toEqual({
       global: ['whitelistValidation'],
     });
+  });
+
+  it('refuses null for every field except the source (NOT NULL columns)', async () => {
+    expect(
+      await errorsOf(UpdateZoneDto, {
+        name: null,
+        kind: null,
+        geometry: null,
+        bufferM: null,
+        alertOnEnter: null,
+        active: null,
+        properties: null,
+      }),
+    ).toEqual({
+      name: ['isLength', 'isString'],
+      kind: ['isIn'],
+      geometry: ['isObject'],
+      bufferM: ['isNumber', 'max', 'min'],
+      alertOnEnter: ['isBoolean'],
+      active: ['isBoolean'],
+      properties: ['isObject'],
+    });
+  });
+
+  it('validates the fields it receives like the create DTO', async () => {
+    expect(
+      await errorsOf(UpdateZoneDto, { name: '', bufferM: -5, kind: 'lake' }),
+    ).toEqual({ name: ['isLength'], bufferM: ['min'], kind: ['isIn'] });
   });
 });
 

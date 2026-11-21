@@ -45,10 +45,7 @@ import {
   type ZoneGeometry,
 } from '../../domain/zone-geometry.js';
 import { parseZoneProperties } from '../../domain/zone-properties.js';
-import {
-  toZoneSnapshot,
-  toZoneTombstone,
-} from '../../domain/zone-snapshot.js';
+import { toZoneSnapshot, toZoneTombstone } from '../../domain/zone-snapshot.js';
 import { GeoOutboxRelay } from '../outbox/geo-outbox.relay.js';
 import {
   assertOwnerFilter,
@@ -72,7 +69,8 @@ export interface CreateZoneInput {
   readonly alertOnEnter?: boolean | undefined;
   readonly active?: boolean | undefined;
   readonly properties?: Readonly<Record<string, unknown>> | undefined;
-  readonly source?: string | undefined;
+  /** `null` or absent = unknown provenance. */
+  readonly source?: string | null | undefined;
   /** `true` = global zone (`super_admin` / `authority`), else a zone of the active organization. */
   readonly global?: boolean | undefined;
 }
@@ -360,7 +358,10 @@ export class ZonesService {
       ),
     );
     this.relay.notify();
-    this.logger.log(`Enqueued ${enqueued} zone snapshots for republication`);
+    this.logger.log(
+      { enqueued, principal: principal.id },
+      'Zone snapshots enqueued for republication',
+    );
     return enqueued;
   }
 
