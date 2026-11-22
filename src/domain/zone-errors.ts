@@ -132,6 +132,102 @@ export class ZoneBufferRequiredError extends DomainError {
   }
 }
 
+/** An edge of a geometry: its two positions and the path of the first one. */
+export interface GeometryEdge {
+  readonly from: readonly [number, number];
+  readonly to: readonly [number, number];
+  /** Path of the first position, e.g. `coordinates.0.3`. */
+  readonly path: string;
+}
+
+/**
+ * `422 ZONE_GEOMETRY_CROSSES_ANTIMERIDIAN`: an edge spans more than 180° of
+ * longitude. GeoJSON edges are straight lines in longitude/latitude (RFC 7946
+ * §3.1.1), so such an edge runs the long way round the globe, while the
+ * stored geography would take the short way across the antimeridian: the
+ * geometry has to be split there (RFC 7946 §3.1.9).
+ */
+export class ZoneGeometryCrossesAntimeridianError extends DomainError {
+  override readonly name = 'ZoneGeometryCrossesAntimeridianError';
+
+  constructor(edge: GeometryEdge) {
+    const span = Math.abs(edge.to[0] - edge.from[0]);
+    super('ZONE_GEOMETRY_CROSSES_ANTIMERIDIAN', {
+      status: 422,
+      title: 'Zone geometry crosses the antimeridian',
+      detail: `The edge from [${edge.from.join(', ')}] to [${edge.to.join(', ')}] (geometry.${edge.path}) spans ${span}° of longitude. Split the geometry at the antimeridian (180°) into a MultiPolygon or MultiLineString whose parts each stay on one side (RFC 7946 §3.1.9), and submit it again`,
+      extra: {
+        from: [...edge.from],
+        to: [...edge.to],
+        path: `geometry.${edge.path}`,
+      },
+    });
+  }
+}
+
+/**
+ * `422 ZONE_SNAPSHOT_TOO_LARGE`: the zone's `geo.zone.upserted.v1` message
+ * would exceed the `max_payload` of the NATS server, so the detectors could
+ * never receive it. Nothing is stored.
+ */
+export class ZoneSnapshotTooLargeError extends DomainError {
+  override readonly name = 'ZoneSnapshotTooLargeError';
+
+  constructor(snapshotBytes: number, maxBytes: number) {
+    super('ZONE_SNAPSHOT_TOO_LARGE', {
+      status: 422,
+      title: 'Zone too large to publish',
+      detail: `The zone's snapshot event is ${snapshotBytes} bytes; the NATS server accepts messages of at most ${maxBytes} bytes. Simplify the geometry (fewer vertices) or reduce its properties, or ask the operator to raise the NATS max_payload (4 MB recommended)`,
+      extra: { snapshotBytes, maxBytes },
+    });
+  }
+}
+
+/** What a quota limits. */
+export type ZoneQuotaResource = 'zones' | 'vertices';
+
+/**
+ * `409 ZONE_QUOTA_EXCEEDED`: the owner (an organization, or the global
+ * namespace) would exceed its number of zones or of vertices.
+ */
+export class ZoneQuotaExceededError extends DomainError {
+  override readonly name = 'ZoneQuotaExceededError';
+
+  constructor(
+    resource: ZoneQuotaResource,
+    orgId: string | null,
+    used: number,
+    requested: number,
+    limit: number,
+  ) {
+    const owner =
+      orgId === null ? 'The global zones' : "The organization's zones";
+    super('ZONE_QUOTA_EXCEEDED', {
+      status: 409,
+      title: 'Zone quota exceeded',
+      detail: `${owner} would use ${used + requested} ${resource}; the quota is ${limit}. Delete or simplify zones, or ask the operator to raise ZONE_QUOTA_MAX_${resource.toUpperCase()}`,
+      extra: { resource, orgId, used, requested, limit },
+    });
+  }
+}
+
+/**
+ * `412 ZONE_VERSION_CONFLICT`: the `If-Match` precondition names another
+ * version of the zone (it changed since the client read it).
+ */
+export class ZoneVersionConflictError extends DomainError {
+  override readonly name = 'ZoneVersionConflictError';
+
+  constructor(id: string, currentEtag: string) {
+    super('ZONE_VERSION_CONFLICT', {
+      status: 412,
+      title: 'Zone changed since it was read',
+      detail: `Zone ${id} was changed by someone else (current version ${currentEtag}). Load it again, re-apply your changes and retry with the new ETag in If-Match`,
+      extra: { id, currentEtag },
+    });
+  }
+}
+
 /** Result of PostGIS `ST_IsValidDetail` for a candidate geometry. */
 export interface GeometryValidity {
   readonly valid: boolean;

@@ -18,7 +18,9 @@ import {
 import { ValidationFailedError } from '@darmawanweb/ais-its-nest';
 
 import {
+  type GeometryEdge,
   ZoneBufferRequiredError,
+  ZoneGeometryCrossesAntimeridianError,
   ZoneGeometryTooComplexError,
   ZoneGeometryTypeNotAllowedError,
 } from './zone-errors.js';
@@ -219,6 +221,97 @@ export function assertVertexLimit(
   if (vertices > maxVertices) {
     throw new ZoneGeometryTooComplexError(vertices, maxVertices);
   }
+}
+
+/** Longest longitude span of one edge, degrees (RFC 7946 §3.1.9). */
+export const MAX_EDGE_LONGITUDE_SPAN_DEG = 180;
+
+/** The first edge of `line` spanning more than 180° of longitude. */
+function crossingEdgeOf(
+  line: readonly GeoJsonPosition[],
+  path: string,
+): GeometryEdge | undefined {
+  for (let index = 1; index < line.length; index += 1) {
+    const from = line[index - 1];
+    const to = line[index];
+    if (from === undefined || to === undefined) continue;
+    if (Math.abs(to[0] - from[0]) > MAX_EDGE_LONGITUDE_SPAN_DEG) {
+      return {
+        from: [from[0], from[1]],
+        to: [to[0], to[1]],
+        path: `${path}.${index - 1}`,
+      };
+    }
+  }
+  return undefined;
+}
+
+/** The first crossing edge of any of `lines` (rings or line strings). */
+function crossingEdgeOfLines(
+  lines: readonly (readonly GeoJsonPosition[])[],
+  path: string,
+): GeometryEdge | undefined {
+  for (const [index, line] of lines.entries()) {
+    const edge = crossingEdgeOf(line, `${path}.${index}`);
+    if (edge !== undefined) return edge;
+  }
+  return undefined;
+}
+
+/**
+ * The first edge that spans more than {@link MAX_EDGE_LONGITUDE_SPAN_DEG}
+ * degrees of longitude, i.e. that crosses the antimeridian when read as the
+ * shortest path (geography) but circles the globe the long way when read as
+ * a straight lon/lat line (GeoJSON, RFC 7946 §3.1.1; PostGIS geometry,
+ * bbox filters, map). Points have no edges.
+ */
+export function findAntimeridianCrossing(
+  geometry: ZoneGeometry,
+  path = 'coordinates',
+): GeometryEdge | undefined {
+  switch (geometry.type) {
+    case 'Point':
+    case 'MultiPoint':
+      return undefined;
+    case 'LineString':
+      return crossingEdgeOf(geometry.coordinates, path);
+    case 'MultiLineString':
+    case 'Polygon':
+      return crossingEdgeOfLines(geometry.coordinates, path);
+    case 'MultiPolygon':
+      for (const [index, polygon] of geometry.coordinates.entries()) {
+        const edge = crossingEdgeOfLines(polygon, `${path}.${index}`);
+        if (edge !== undefined) return edge;
+      }
+      return undefined;
+    case 'GeometryCollection':
+      for (const [index, member] of geometry.geometries.entries()) {
+        const edge = findAntimeridianCrossing(
+          member,
+          `geometries.${index}.coordinates`,
+        );
+        if (edge !== undefined) return edge;
+      }
+      return undefined;
+  }
+}
+
+/**
+ * Refuses geometries that cross the antimeridian: stored as geography they
+ * would be small areas across 180°, while validity, bbox filters, summaries,
+ * the map and the tiles (lon/lat geometry) would see a band around most of
+ * the globe. RFC 7946 §3.1.9 asks for such geometries to be cut at the
+ * antimeridian; the client splits them, the service never does it silently.
+ *
+ * Methodology: a platform input-validation rule (proposed catalog id
+ * `geo.zone_geometry_rules`, see the README), not an analytic method.
+ *
+ * @see https://www.rfc-editor.org/rfc/rfc7946#section-3.1.9
+ * @throws {ZoneGeometryCrossesAntimeridianError} `422 ZONE_GEOMETRY_CROSSES_ANTIMERIDIAN`
+ */
+export function assertNoAntimeridianCrossing(geometry: ZoneGeometry): void {
+  const edge = findAntimeridianCrossing(geometry);
+  if (edge !== undefined) throw new ZoneGeometryCrossesAntimeridianError(edge);
 }
 
 /**

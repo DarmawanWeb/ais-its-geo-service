@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 import { EVENT_TYPES } from '@darmawanweb/ais-its-contracts/events';
 import { waitFor } from '@darmawanweb/ais-its-nest/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -8,6 +10,7 @@ import {
   PIPELINE_ZONE_CODE,
 } from '../src/modules/seed/legacy-datasets.js';
 import { ZoneSeeder } from '../src/modules/seed/zone-seeder.js';
+import { GEOMETRY_REPAIR_METHOD } from '../src/modules/zones/zones.repository.js';
 import { lastZoneMessage } from './support/geo-stream.js';
 import {
   startTestService,
@@ -108,15 +111,57 @@ describe('ZoneSeeder', () => {
         methodId: 'data.batam_area',
         province: 'Kepulauan Riau',
         geometryRepair: {
-          method: 'ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3))',
+          method: GEOMETRY_REPAIR_METHOD,
           reason: 'Self-intersection',
           verticesBefore: 795,
+          verticesAfter: 795,
+          partsBefore: 73,
+          partsAfter: 70,
         },
       },
     });
-    expect(batam?.vertices).toBeGreaterThanOrEqual(795);
+    // The overlapping parts are merged (union), not cut out (XOR).
+    expect(batam?.vertices).toBe(795);
     // Two snapshots and two audit records (system actor).
     expect(await outboxRows()).toBe(4);
+  });
+
+  it('keeps every square metre of the legacy Batam parts (overlaps merged)', async () => {
+    const file = JSON.parse(
+      await readFile(
+        new URL('../data/legacy/batam.json', import.meta.url),
+        'utf8',
+      ),
+    ) as { features: { geometry: unknown }[] };
+    const legacy = JSON.stringify(file.features[0]?.geometry);
+    const { rows } = await service.pool.query<{
+      parts: number;
+      worst_uncovered_m2: number;
+      area_km2: number;
+      union_km2: number;
+      overlap_point_inside: boolean;
+    }>(
+      `WITH stored AS (SELECT geom::geometry AS g FROM zones WHERE code = $2),
+            legacy AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON($1), 4326) AS g)
+       SELECT (SELECT count(*)::int FROM legacy, ST_Dump(legacy.g)) AS parts,
+              (SELECT max(ST_Area(ST_Difference(d.geom, stored.g)::geography))
+                 FROM legacy, stored, ST_Dump(legacy.g) AS d) AS worst_uncovered_m2,
+              (SELECT ST_Area(stored.g::geography) / 1e6 FROM stored) AS area_km2,
+              (SELECT ST_Area(ST_UnaryUnion(legacy.g)::geography) / 1e6 FROM legacy) AS union_km2,
+              (SELECT ST_Intersects(stored.g, ST_SetSRID(ST_MakePoint(103.90444987, 0.82086512), 4326))
+                 FROM stored) AS overlap_point_inside`,
+      [legacy, BATAM_ZONE_CODE],
+    );
+    const facts = rows[0];
+    expect(facts?.parts).toBe(73);
+    // Every legacy part is covered, up to the float noding of the union
+    // (< 1 m² per part; the XOR repair lost 36 588 m² of parts 17/19 alone).
+    expect(facts?.worst_uncovered_m2).toBeLessThan(1);
+    // Area of the union of the parts (7 358.689 km²), not of their XOR (7 358.643).
+    expect(facts?.area_km2).toBeCloseTo(facts?.union_km2 ?? 0, 5);
+    expect(facts?.area_km2).toBeCloseTo(7358.689, 2);
+    // Inside legacy parts 17 and 19 (their overlap).
+    expect(facts?.overlap_point_inside).toBe(true);
   });
 
   it('publishes the seeded zones to GEO for the detectors', async () => {

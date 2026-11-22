@@ -3,7 +3,7 @@
   "paths": {
     "/api/v2/zones": {
       "get": {
-        "description": "Page-based list without geometries (use GET /zones/:id or /zones/geojson). bbox matches zones whose geometry intersects the box in lon/lat.",
+        "description": "Page-based list without geometries (use GET /zones/:id or /zones/geojson). bbox matches zones whose area of effect (geometry and bufferM, e.g. the circle of a point zone) reaches the box in lon/lat.",
         "operationId": "ZonesController_list",
         "parameters": [
           {
@@ -154,6 +154,15 @@
         },
         "responses": {
           "201": {
+            "headers": {
+              "ETag": {
+                "description": "Version of the zone (the quoted updatedAt); send it in If-Match to change or delete exactly this version",
+                "schema": {
+                  "type": "string",
+                  "example": "\"2026-11-21T10:00:00.123Z\""
+                }
+              }
+            },
             "description": "",
             "content": {
               "application/json": {
@@ -162,6 +171,12 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "ZONE_CODE_TAKEN or ZONE_QUOTA_EXCEEDED (problem details)"
+          },
+          "422": {
+            "description": "ZONE_GEOMETRY_TYPE_NOT_ALLOWED, ZONE_GEOMETRY_TOO_COMPLEX, ZONE_BUFFER_REQUIRED, ZONE_GEOMETRY_CROSSES_ANTIMERIDIAN, ZONE_GEOMETRY_INVALID or ZONE_SNAPSHOT_TOO_LARGE (problem details)"
           },
           "default": {
             "description": "Problem details (RFC 9457)",
@@ -185,7 +200,7 @@
     },
     "/api/v2/zones/geojson": {
       "get": {
-        "description": "Organization zones reach the map only here (the Martin tiles serve global zones). Active zones by default; coordinates rounded to 6 decimals.",
+        "description": "Organization zones reach the map only here (the Martin tiles serve global zones). Active zones by default; geometries simplified for `zoom` and rounded to 6 decimals; at most ZONES_GEOJSON_MAX_FEATURES features and ZONES_GEOJSON_MAX_VERTICES vertices per response (`truncated`, `truncatedBy`). The response is streamed.",
         "operationId": "ZonesController_geojson",
         "parameters": [
           {
@@ -233,6 +248,18 @@
             "schema": {
               "format": "uuid",
               "type": "string"
+            }
+          },
+          {
+            "name": "zoom",
+            "required": false,
+            "in": "query",
+            "description": "Map zoom level: geometries are simplified to half a pixel of it (ST_SimplifyPreserveTopology); full resolution when absent or >= 19",
+            "schema": {
+              "minimum": 0,
+              "maximum": 24,
+              "example": 9,
+              "type": "number"
             }
           },
           {
@@ -328,6 +355,15 @@
         ],
         "responses": {
           "200": {
+            "headers": {
+              "ETag": {
+                "description": "Version of the zone (the quoted updatedAt); send it in If-Match to change or delete exactly this version",
+                "schema": {
+                  "type": "string",
+                  "example": "\"2026-11-21T10:00:00.123Z\""
+                }
+              }
+            },
             "description": "",
             "content": {
               "application/json": {
@@ -357,12 +393,22 @@
         ]
       },
       "patch": {
+        "description": "Send the ETag of the version you edited in If-Match: a zone changed since answers 412 ZONE_VERSION_CONFLICT instead of being overwritten.",
         "operationId": "ZonesController_update",
         "parameters": [
           {
             "name": "id",
             "required": true,
             "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "ETag of the version the change is based on (or *): answered with 412 ZONE_VERSION_CONFLICT when the zone changed since. Recommended for every editor (prevents lost updates)",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -380,6 +426,15 @@
         },
         "responses": {
           "200": {
+            "headers": {
+              "ETag": {
+                "description": "Version of the zone (the quoted updatedAt); send it in If-Match to change or delete exactly this version",
+                "schema": {
+                  "type": "string",
+                  "example": "\"2026-11-21T10:00:00.123Z\""
+                }
+              }
+            },
             "description": "",
             "content": {
               "application/json": {
@@ -388,6 +443,15 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "ZONE_QUOTA_EXCEEDED"
+          },
+          "412": {
+            "description": "ZONE_VERSION_CONFLICT: the zone changed since it was read"
+          },
+          "422": {
+            "description": "Geometry rules (see POST), ZONE_SNAPSHOT_TOO_LARGE"
           },
           "default": {
             "description": "Problem details (RFC 9457)",
@@ -418,11 +482,23 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "ETag of the version the change is based on (or *): answered with 412 ZONE_VERSION_CONFLICT when the zone changed since. Recommended for every editor (prevents lost updates)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": ""
+          },
+          "412": {
+            "description": "ZONE_VERSION_CONFLICT: the zone changed since it was read"
           },
           "default": {
             "description": "Problem details (RFC 9457)",
@@ -839,18 +915,54 @@
           },
           "truncated": {
             "type": "boolean",
-            "description": "true when more zones matched than `limit` (narrow the bbox or the kinds)"
+            "description": "true when more zones matched than the budgets allow (zoom out with `zoom`, narrow the bbox or the kinds)"
+          },
+          "truncatedBy": {
+            "type": "string",
+            "enum": [
+              "features",
+              "vertices"
+            ],
+            "nullable": true,
+            "description": "The budget that cut the response; null when complete"
           },
           "limit": {
             "type": "number",
-            "description": "Largest number of features of one response"
+            "description": "Largest number of features of one response (ZONES_GEOJSON_MAX_FEATURES)"
+          },
+          "vertexLimit": {
+            "type": "number",
+            "description": "Largest number of vertices of one response, after simplification (ZONES_GEOJSON_MAX_VERTICES)"
+          },
+          "featureCount": {
+            "type": "number",
+            "description": "Features in this response"
+          },
+          "vertexCount": {
+            "type": "number",
+            "description": "Vertices in this response (after simplification)"
+          },
+          "zoom": {
+            "type": "number",
+            "nullable": true,
+            "description": "The requested zoom level; null = full resolution"
+          },
+          "toleranceDeg": {
+            "type": "number",
+            "description": "Simplification tolerance applied, degrees (0 = none)"
           }
         },
         "required": [
           "type",
           "features",
           "truncated",
-          "limit"
+          "truncatedBy",
+          "limit",
+          "vertexLimit",
+          "featureCount",
+          "vertexCount",
+          "zoom",
+          "toleranceDeg"
         ]
       },
       "RepublishResultDto": {

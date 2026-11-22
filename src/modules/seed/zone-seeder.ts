@@ -5,6 +5,7 @@ import { countGeometryPositions } from '@darmawanweb/ais-its-contracts/domain';
 import { Injectable, Logger } from '@nestjs/common';
 
 import { ZoneGeometryInvalidError } from '../../domain/zone-errors.js';
+import { GEOMETRY_REPAIR_METHOD } from '../zones/zones.repository.js';
 import {
   type SeedMode,
   type SeedOutcome,
@@ -17,6 +18,11 @@ import {
   type SeedDatasetFile,
   type SeedZone,
 } from './legacy-datasets.js';
+
+/** Parts of a geometry (polygons of a MultiPolygon, 1 otherwise). */
+function partCount(geometry: SeedZoneDefinition['geometry']): number {
+  return geometry.type === 'MultiPolygon' ? geometry.coordinates.length : 1;
+}
 
 /** The repository root (`src/` and `dist/` are one level below it). */
 const ROOT = new URL('../../../', import.meta.url);
@@ -38,7 +44,7 @@ export interface SeedResult {
   readonly code: string;
   readonly id: string;
   readonly outcome: SeedOutcome;
-  /** `true` when the dataset geometry was repaired (`ST_MakeValid`). */
+  /** `true` when the dataset geometry was repaired ({@link GEOMETRY_REPAIR_METHOD}). */
   readonly repaired: boolean;
 }
 
@@ -82,9 +88,10 @@ export class ZoneSeeder {
 
   /**
    * The seed zone with its geometry repaired when the dataset is known to be
-   * invalid: logged and recorded in `properties.geometryRepair` (method,
-   * GEOS reason and location, vertices before and after) so the change is
-   * never silent.
+   * invalid ({@link GEOMETRY_REPAIR_METHOD}: overlapping parts are merged,
+   * nothing of their area is lost): logged and recorded in
+   * `properties.geometryRepair` (method, GEOS reason and location, vertices
+   * and parts before and after) so the change is never silent.
    */
   private async prepared(
     seed: SeedZone,
@@ -94,14 +101,15 @@ export class ZoneSeeder {
     if (!seed.repairInvalidGeometry) {
       throw new ZoneGeometryInvalidError(validity);
     }
-    const geometry = await this.zones.makeValidMultiPolygon(seed.zone.geometry);
+    const geometry = await this.zones.repairMultiPolygon(seed.zone.geometry);
     this.logger.warn(
       {
         code: seed.zone.code,
         reason: validity.reason,
         location: validity.location,
+        method: GEOMETRY_REPAIR_METHOD,
       },
-      'Invalid dataset geometry repaired explicitly with ST_MakeValid (recorded in properties.geometryRepair)',
+      'Invalid dataset geometry repaired explicitly (recorded in properties.geometryRepair)',
     );
     return {
       repaired: true,
@@ -111,11 +119,13 @@ export class ZoneSeeder {
         properties: {
           ...seed.zone.properties,
           geometryRepair: {
-            method: 'ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3))',
+            method: GEOMETRY_REPAIR_METHOD,
             reason: validity.reason,
             location: validity.location,
             verticesBefore: countGeometryPositions(seed.zone.geometry),
             verticesAfter: countGeometryPositions(geometry),
+            partsBefore: partCount(seed.zone.geometry),
+            partsAfter: partCount(geometry),
           },
         },
       },

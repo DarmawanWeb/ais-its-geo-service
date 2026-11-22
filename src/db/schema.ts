@@ -9,7 +9,18 @@ import * as pg from 'drizzle-orm/pg-core';
 /** The service's PostgreSQL schema, owned by the role `geo_svc`. */
 export const serviceSchema = pg.pgSchema('geo');
 
-/** Zones and geofences (`0001_init.sql`); `org_id` NULL = global zone. */
+/**
+ * A PostGIS `geometry(Polygon, 4326)` column that only SQL predicates use
+ * (the generated `extent`); it is never selected or written by the service.
+ */
+const polygonGeometry = pg.customType<{ data: string; driverData: string }>({
+  dataType: () => 'geometry(Polygon, 4326)',
+});
+
+/**
+ * Zones and geofences (`0001_init.sql`, `0002_map_extent_quota_tiles.sql`);
+ * `org_id` NULL = global zone.
+ */
 export const zones = serviceSchema.table(
   'zones',
   {
@@ -37,6 +48,15 @@ export const zones = serviceSchema.table(
       .timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    /** `ST_NPoints` of the geometry (map budget, quotas). */
+    vertexCount: pg
+      .integer('vertex_count')
+      .notNull()
+      .generatedAlwaysAs(sql`ST_NPoints(geom::geometry)`),
+    /** Lon/lat box of the geometry expanded by its buffer (bbox filters). */
+    extent: polygonGeometry('extent')
+      .notNull()
+      .generatedAlwaysAs(sql`zone_extent(geom, buffer_m)`),
   },
   (table) => [
     pg
@@ -46,6 +66,11 @@ export const zones = serviceSchema.table(
     pg.index('zones_geom_gist').using('gist', sql`(${table.geom}::geometry)`),
     pg.index('zones_org_kind_idx').on(table.orgId, table.kind),
     pg.index('zones_kind_active_idx').on(table.kind, table.active),
+    pg.index('zones_extent_gist').using('gist', table.extent),
+    pg
+      .index('zones_tiles_geom_gist')
+      .using('gist', sql`(${table.geom}::geometry)`)
+      .where(sql`org_id IS NULL AND active`),
   ],
 );
 

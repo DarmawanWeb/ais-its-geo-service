@@ -72,24 +72,37 @@ export interface ZoneFeature {
   readonly properties: ZoneFeatureProperties;
 }
 
+/** The zone fields of a map feature (everything but the geometry). */
+export type ZoneFeatureSource = Omit<
+  Zone,
+  'geometry' | 'createdBy' | 'createdAt'
+>;
+
+/** The `properties` of the map Feature of a zone. */
+export function zoneFeatureProperties(
+  zone: ZoneFeatureSource,
+): ZoneFeatureProperties {
+  return {
+    id: zone.id,
+    orgId: zone.orgId,
+    global: zone.orgId === null,
+    code: zone.code,
+    name: zone.name,
+    kind: zone.kind,
+    bufferM: zone.bufferM,
+    alertOnEnter: zone.alertOnEnter,
+    active: zone.active,
+    updatedAt: zone.updatedAt.toISOString(),
+    zoneProperties: snapshotProperties(zone),
+  };
+}
+
 /** Maps a zone to the Feature of `GET /api/v2/zones/geojson`. */
 export function toZoneFeature(zone: Zone): ZoneFeature {
   return {
     type: 'Feature',
     id: zone.id,
     geometry: zone.geometry,
-    properties: {
-      id: zone.id,
-      orgId: zone.orgId,
-      global: zone.orgId === null,
-      code: zone.code,
-      name: zone.name,
-      kind: zone.kind,
-      bufferM: zone.bufferM,
-      alertOnEnter: zone.alertOnEnter,
-      active: zone.active,
-      updatedAt: zone.updatedAt.toISOString(),
-      zoneProperties: snapshotProperties(zone),
-    },
+    properties: zoneFeatureProperties(zone),
   };
 }

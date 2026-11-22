@@ -1,3 +1,4 @@
+import { ZONE_MAX_VERTICES } from '@darmawanweb/ais-its-contracts/domain';
 import {
   type AppConfig,
   defineConfig,
@@ -32,6 +33,21 @@ export const configSchema = defineConfig({
   ),
   /** Most features of one `GET /zones/geojson` response (more → `truncated: true`). */
   ZONES_GEOJSON_MAX_FEATURES: envInteger(1, 50_000).default(5_000),
+  /**
+   * Most vertices (after simplification) of one `GET /zones/geojson`
+   * response (more → `truncated: true`): about 24 bytes each, so the
+   * default bounds a response near 6 MB. At least one zone of
+   * `ZONE_MAX_VERTICES` (50 000) always fits.
+   */
+  ZONES_GEOJSON_MAX_VERTICES: envInteger(ZONE_MAX_VERTICES, 5_000_000).default(
+    250_000,
+  ),
+  /** Most zones per owner (each organization; all global zones together). */
+  ZONE_QUOTA_MAX_ZONES: envInteger(1, 1_000_000).default(1_000),
+  /** Most vertices of all zones of one owner (at least one zone of 50 000). */
+  ZONE_QUOTA_MAX_VERTICES: envInteger(ZONE_MAX_VERTICES, 100_000_000).default(
+    2_000_000,
+  ),
 
   /** Run the outbox relay loop in this process (tests and seed jobs turn it off). */
   OUTBOX_RELAY_ENABLED: envBoolean().default(true),

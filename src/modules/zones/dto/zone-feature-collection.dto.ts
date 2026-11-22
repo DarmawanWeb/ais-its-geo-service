@@ -5,45 +5,39 @@ import {
 import { ApiProperty } from '@nestjs/swagger';
 
 import type { ZoneGeometry } from '../../../domain/zone-geometry.js';
-import {
-  toZoneFeature,
-  type ZoneFeature,
-  type ZoneFeatureProperties,
-} from '../../../domain/zone-snapshot.js';
-import type { ZoneFeatureSet } from '../zones.service.js';
 import { GeoJsonGeometryDto } from './geojson-geometry.dto.js';
 
-/** `properties` of a zone feature. */
+/** `properties` of a zone feature (`zoneFeatureProperties` in `domain/zone-snapshot.ts`). */
 export class ZoneFeaturePropertiesDto {
   @ApiProperty({ format: 'uuid' })
-  readonly id: string;
+  readonly id!: string;
 
   @ApiProperty({ type: String, format: 'uuid', nullable: true })
-  readonly orgId: string | null;
+  readonly orgId!: string | null;
 
   @ApiProperty()
-  readonly global: boolean;
+  readonly global!: boolean;
 
   @ApiProperty()
-  readonly code: string;
+  readonly code!: string;
 
   @ApiProperty()
-  readonly name: string;
+  readonly name!: string;
 
   @ApiProperty({ enum: ZONE_KINDS })
-  readonly kind: ZoneKind;
+  readonly kind!: ZoneKind;
 
   @ApiProperty({ description: 'meters' })
-  readonly bufferM: number;
+  readonly bufferM!: number;
 
   @ApiProperty()
-  readonly alertOnEnter: boolean;
+  readonly alertOnEnter!: boolean;
 
   @ApiProperty()
-  readonly active: boolean;
+  readonly active!: boolean;
 
   @ApiProperty({ format: 'date-time' })
-  readonly updatedAt: string;
+  readonly updatedAt!: string;
 
   @ApiProperty({
     type: 'object',
@@ -51,72 +45,81 @@ export class ZoneFeaturePropertiesDto {
     description:
       'Kind-specific properties with the provenance (source), e.g. the pipeline KP markers',
   })
-  readonly zoneProperties: Record<string, unknown>;
-
-  constructor(properties: ZoneFeatureProperties) {
-    this.id = properties.id;
-    this.orgId = properties.orgId;
-    this.global = properties.global;
-    this.code = properties.code;
-    this.name = properties.name;
-    this.kind = properties.kind;
-    this.bufferM = properties.bufferM;
-    this.alertOnEnter = properties.alertOnEnter;
-    this.active = properties.active;
-    this.updatedAt = properties.updatedAt;
-    this.zoneProperties = properties.zoneProperties;
-  }
+  readonly zoneProperties!: Record<string, unknown>;
 }
 
 /** A zone as a GeoJSON Feature (RFC 7946 §3.2). */
 export class ZoneFeatureDto {
   @ApiProperty({ enum: ['Feature'] })
-  readonly type: 'Feature';
+  readonly type!: 'Feature';
 
   @ApiProperty({ format: 'uuid', description: 'The zone id' })
-  readonly id: string;
+  readonly id!: string;
 
   @ApiProperty({ type: GeoJsonGeometryDto })
-  readonly geometry: ZoneGeometry;
+  readonly geometry!: ZoneGeometry;
 
   @ApiProperty({ type: ZoneFeaturePropertiesDto })
-  readonly properties: ZoneFeaturePropertiesDto;
-
-  constructor(feature: ZoneFeature) {
-    this.type = feature.type;
-    this.id = feature.id;
-    this.geometry = feature.geometry;
-    this.properties = new ZoneFeaturePropertiesDto(feature.properties);
-  }
+  readonly properties!: ZoneFeaturePropertiesDto;
 }
 
 /**
  * `GET /zones/geojson`: a GeoJSON FeatureCollection (RFC 7946 §3.3,
- * `application/geo+json`) for the web map, coordinates rounded to 6
- * decimals (≈ 0.1 m); `truncated` and `limit` are foreign members.
+ * `application/geo+json`) for the web map, geometries simplified for the
+ * zoom and rounded to 6 decimals (≈ 0.1 m). The members after `features`
+ * are foreign members describing the budgets. The response is streamed by
+ * `featureCollectionJson` (`domain/zone-map.ts`); this class documents it.
  */
 export class ZoneFeatureCollectionDto {
   @ApiProperty({ enum: ['FeatureCollection'] })
-  readonly type: 'FeatureCollection';
+  readonly type!: 'FeatureCollection';
 
   @ApiProperty({ type: [ZoneFeatureDto] })
-  readonly features: ZoneFeatureDto[];
+  readonly features!: ZoneFeatureDto[];
 
   @ApiProperty({
     description:
-      'true when more zones matched than `limit` (narrow the bbox or the kinds)',
+      'true when more zones matched than the budgets allow (zoom out with `zoom`, narrow the bbox or the kinds)',
   })
-  readonly truncated: boolean;
+  readonly truncated!: boolean;
 
-  @ApiProperty({ description: 'Largest number of features of one response' })
-  readonly limit: number;
+  @ApiProperty({
+    type: String,
+    enum: ['features', 'vertices'],
+    nullable: true,
+    description: 'The budget that cut the response; null when complete',
+  })
+  readonly truncatedBy!: 'features' | 'vertices' | null;
 
-  constructor(set: ZoneFeatureSet) {
-    this.type = 'FeatureCollection';
-    this.features = set.zones.map(
-      (zone) => new ZoneFeatureDto(toZoneFeature(zone)),
-    );
-    this.truncated = set.truncated;
-    this.limit = set.limit;
-  }
+  @ApiProperty({
+    description:
+      'Largest number of features of one response (ZONES_GEOJSON_MAX_FEATURES)',
+  })
+  readonly limit!: number;
+
+  @ApiProperty({
+    description:
+      'Largest number of vertices of one response, after simplification (ZONES_GEOJSON_MAX_VERTICES)',
+  })
+  readonly vertexLimit!: number;
+
+  @ApiProperty({ description: 'Features in this response' })
+  readonly featureCount!: number;
+
+  @ApiProperty({
+    description: 'Vertices in this response (after simplification)',
+  })
+  readonly vertexCount!: number;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    description: 'The requested zoom level; null = full resolution',
+  })
+  readonly zoom!: number | null;
+
+  @ApiProperty({
+    description: 'Simplification tolerance applied, degrees (0 = none)',
+  })
+  readonly toleranceDeg!: number;
 }

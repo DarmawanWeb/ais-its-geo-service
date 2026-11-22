@@ -8,6 +8,7 @@ import * as schema from './db/schema.js';
 import { MethodologyModule } from './modules/methodology/methodology.module.js';
 import { GeoOutboxModule } from './modules/outbox/outbox.module.js';
 import { SeedModule } from './modules/seed/seed.module.js';
+import { TilesModule } from './modules/tiles/tiles.module.js';
 import { ZonesModule } from './modules/zones/zones.module.js';
 
 /**
@@ -31,6 +32,8 @@ import { ZonesModule } from './modules/zones/zones.module.js';
     GeoOutboxModule,
     ZonesModule,
     SeedModule,
+    // Re-applies the tiles_ro grants of the Martin sources after migrations.
+    TilesModule,
     MethodologyModule,
   ],
 })

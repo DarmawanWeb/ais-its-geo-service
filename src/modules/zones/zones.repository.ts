@@ -3,11 +3,12 @@ import type {
   EventPayload,
   EventType,
 } from '@darmawanweb/ais-its-contracts/events';
+import type { BBox } from '@darmawanweb/ais-its-contracts/domain';
 import {
+  bboxEnvelope,
   type Database,
   geoJsonToGeography,
   geographyAsGeoJson,
-  geographyIntersectsBBox,
   InjectDb,
   InjectPool,
   type Pool,
@@ -42,6 +43,11 @@ import type {
 } from '../../domain/zone.js';
 import type { GeometryValidity } from '../../domain/zone-errors.js';
 import type { ZoneGeometry } from '../../domain/zone-geometry.js';
+import {
+  MAP_GEOMETRY_DIGITS,
+  type MapFeatureRow,
+} from '../../domain/zone-map.js';
+import type { ZoneUsage } from '../../domain/zone-quota.js';
 import { geometryTypeFromPostgis } from './postgis-geometry-type.js';
 
 const { zones } = schema;
@@ -52,18 +58,27 @@ export const ZONE_CODE_CONSTRAINT = 'zones_org_code_key';
 /** Decimal digits of coordinates read back from PostGIS (1e-9° ≈ 0.1 mm). */
 export const STORED_GEOMETRY_DIGITS = 9;
 
-/** Decimal digits of the map FeatureCollection (1e-6° ≈ 0.11 m). */
-export const MAP_GEOMETRY_DIGITS = 6;
+/**
+ * The explicit repair of a known-invalid legacy polygon dataset (seeds only,
+ * never the API). The `structure` method of `ST_MakeValid` (GEOS ≥ 3.10)
+ * unions the exterior rings, so areas covered by overlapping parts stay in
+ * the zone; the default `linework` method would build areas by symmetric
+ * difference and cut the overlaps out. Recorded in `properties.geometryRepair`.
+ *
+ * @see https://postgis.net/docs/ST_MakeValid.html
+ */
+export const GEOMETRY_REPAIR_METHOD =
+  "ST_Multi(ST_CollectionExtract(ST_MakeValid(geom, 'method=structure'), 3))";
 
 /** Columns of a full zone; `geometry` is the stored geography as GeoJSON. */
-function zoneColumns(digits: number = STORED_GEOMETRY_DIGITS) {
+function zoneColumns() {
   return {
     id: zones.id,
     orgId: zones.orgId,
     code: zones.code,
     name: zones.name,
     kind: zones.kind,
-    geometry: geographyAsGeoJson(zones.geom, digits),
+    geometry: geographyAsGeoJson(zones.geom, STORED_GEOMETRY_DIGITS),
     bufferM: zones.bufferM,
     alertOnEnter: zones.alertOnEnter,
     active: zones.active,
@@ -91,7 +106,7 @@ const summaryColumns = {
   createdAt: zones.createdAt,
   updatedAt: zones.updatedAt,
   postgisType: sql<string>`GeometryType(${zones.geom}::geometry)`,
-  vertexCount: sql<number>`ST_NPoints(${zones.geom}::geometry)`,
+  vertexCount: zones.vertexCount,
   minLon: sql<number>`ST_XMin(${zones.geom}::geometry)`,
   minLat: sql<number>`ST_YMin(${zones.geom}::geometry)`,
   maxLon: sql<number>`ST_XMax(${zones.geom}::geometry)`,
@@ -121,6 +136,22 @@ export function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (character) => `\\${character}`);
 }
 
+/**
+ * Zones whose area of effect — the geometry and every point within
+ * `buffer_m` of it (a point zone is a circle) — may intersect the box, in
+ * lon/lat space (box edges are meridians and parallels, as on the map). The
+ * GiST index on the generated `extent` (box of the geometry grown by its
+ * buffer) prefilters; the geometry, or its distance to the box within the
+ * zone's conservative buffer radius in degrees (`zone_buffer_degrees`,
+ * `0002_map_extent_quota_tiles.sql`), decides. Conservative: a zone at most
+ * about 1 % (more near the poles) beyond its buffer may match; none whose
+ * buffer reaches the box is missed.
+ */
+export function bufferedBBoxCondition(bbox: BBox): SQL {
+  const box = bboxEnvelope(bbox);
+  return sql`(${zones.extent} && ${box} AND (ST_Intersects(${zones.geom}::geometry, ${box}) OR (${zones.bufferM} > 0 AND ST_DWithin(${zones.geom}::geometry, ${box}, zone_buffer_degrees(${zones.geom}, ${zones.bufferM})))))`;
+}
+
 /** The tenancy condition of a read scope (spec §8.5). */
 function scopeCondition(scope: ZoneReadScope): SQL | undefined {
   if (scope.kind === 'all') return undefined;
@@ -139,9 +170,7 @@ function filterConditions(filter: ZoneFilter): (SQL | undefined)[] {
       ? undefined
       : inArray(zones.kind, [...filter.kinds]),
     filter.active === undefined ? undefined : eq(zones.active, filter.active),
-    filter.bbox === undefined
-      ? undefined
-      : geographyIntersectsBBox(zones.geom, filter.bbox),
+    filter.bbox === undefined ? undefined : bufferedBBoxCondition(filter.bbox),
     filter.orgId === undefined ? undefined : eq(zones.orgId, filter.orgId),
     search === undefined
       ? undefined
@@ -154,6 +183,30 @@ export interface ZonePage {
   readonly rows: ZoneSummary[];
   readonly total: number;
 }
+
+/** A zone of the map layer before its geometry is read, in layer order. */
+export interface MapCandidate {
+  readonly id: string;
+  readonly kind: string;
+  readonly name: string;
+  /** Stored vertices (before simplification). */
+  readonly vertexCount: number;
+}
+
+/** Columns of a map feature except the geometry. */
+const mapFeatureColumns = {
+  id: zones.id,
+  orgId: zones.orgId,
+  code: zones.code,
+  name: zones.name,
+  kind: zones.kind,
+  bufferM: zones.bufferM,
+  alertOnEnter: zones.alertOnEnter,
+  active: zones.active,
+  properties: zones.properties,
+  source: zones.source,
+  updatedAt: zones.updatedAt,
+};
 
 /**
  * Drizzle/PostGIS access to `zones`. Reads take a {@link ZoneReadScope}, so
@@ -208,20 +261,86 @@ export class ZonesRepository {
   }
 
   /**
-   * Zones with geometries rounded to {@link MAP_GEOMETRY_DIGITS} for the
-   * map, at most `limit` rows (callers ask for one more to detect truncation).
+   * The next zones of the map layer after `after` in layer order (kind,
+   * name, id), with their stored vertex counts: no geometry is read.
    */
-  features(
+  mapCandidates(
     filter: ZoneFilter,
     scope: ZoneReadScope,
+    after: MapCandidate | null,
     limit: number,
-  ): Promise<Zone[]> {
+  ): Promise<MapCandidate[]> {
     return this.db
-      .select(zoneColumns(MAP_GEOMETRY_DIGITS))
+      .select({
+        id: zones.id,
+        kind: zones.kind,
+        name: zones.name,
+        vertexCount: zones.vertexCount,
+      })
       .from(zones)
-      .where(and(scopeCondition(scope), ...filterConditions(filter)))
+      .where(
+        and(
+          scopeCondition(scope),
+          ...filterConditions(filter),
+          after === null
+            ? undefined
+            : sql`(${zones.kind}, ${zones.name}, ${zones.id}) > (${after.kind}, ${after.name}, ${after.id}::uuid)`,
+        ),
+      )
       .orderBy(asc(zones.kind), asc(zones.name), asc(zones.id))
       .limit(limit);
+  }
+
+  /**
+   * The map features of these zones, in the order of `ids`: the geometry
+   * simplified with `ST_SimplifyPreserveTopology` (when `toleranceDeg > 0`)
+   * and rounded to {@link MAP_GEOMETRY_DIGITS} decimals as GeoJSON text.
+   * Scope and filter are applied again, so a zone changed since it was
+   * listed is left out rather than shown stale.
+   */
+  async mapFeatures(
+    ids: readonly string[],
+    filter: ZoneFilter,
+    scope: ZoneReadScope,
+    toleranceDeg: number,
+  ): Promise<MapFeatureRow[]> {
+    if (ids.length === 0) return [];
+    const geometry =
+      toleranceDeg > 0
+        ? sql`ST_SimplifyPreserveTopology(${zones.geom}::geometry, ${toleranceDeg}::double precision)`
+        : sql`${zones.geom}::geometry`;
+    const simplified = this.db
+      .select({ ...mapFeatureColumns, g: geometry.as('g') })
+      .from(zones)
+      .where(
+        and(
+          inArray(zones.id, [...ids]),
+          scopeCondition(scope),
+          ...filterConditions(filter),
+        ),
+      )
+      .as('s');
+    const rows = await this.db
+      .select({
+        id: simplified.id,
+        orgId: simplified.orgId,
+        code: simplified.code,
+        name: simplified.name,
+        kind: simplified.kind,
+        bufferM: simplified.bufferM,
+        alertOnEnter: simplified.alertOnEnter,
+        active: simplified.active,
+        properties: simplified.properties,
+        source: simplified.source,
+        updatedAt: simplified.updatedAt,
+        geometryJson: sql<string>`ST_AsGeoJSON(${simplified.g}, ${sql.raw(String(MAP_GEOMETRY_DIGITS))})`,
+        vertices: sql<number>`ST_NPoints(${simplified.g})`,
+      })
+      .from(simplified);
+    const order = new Map(ids.map((id, index) => [id, index]));
+    return rows.sort(
+      (left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0),
+    );
   }
 
   /**
@@ -251,14 +370,13 @@ export class ZonesRepository {
   }
 
   /**
-   * The explicit repair used by seeds of known-invalid legacy datasets only
-   * (never by the API): `ST_MakeValid`, keeping the polygonal part as a
-   * MultiPolygon (`ST_CollectionExtract(…, 3)`).
+   * Repairs a known-invalid legacy polygon dataset with
+   * {@link GEOMETRY_REPAIR_METHOD} (seeds only, never the API).
    */
-  async makeValidMultiPolygon(geometry: ZoneGeometry): Promise<ZoneGeometry> {
+  async repairMultiPolygon(geometry: ZoneGeometry): Promise<ZoneGeometry> {
     const result = await this.db.execute<{ geometry: ZoneGeometry }>(sql`
       SELECT ST_AsGeoJSON(
-               ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_GeomFromGeoJSON(${JSON.stringify(geometry)})), 3)),
+               ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_GeomFromGeoJSON(${JSON.stringify(geometry)}), 'method=structure'), 3)),
                ${sql.raw(String(STORED_GEOMETRY_DIGITS))})::json AS geometry`);
     const row = result.rows[0];
     if (row === undefined) throw new Error('ST_MakeValid returned no row');
@@ -298,6 +416,26 @@ export class ZoneUnitOfWork {
       .limit(1)
       .for('update');
     return row;
+  }
+
+  /**
+   * Serializes the quota checks of one owner until the transaction ends
+   * (transaction-scoped advisory lock; concurrent writes of other owners do
+   * not wait), then reads what the owner holds from the stored vertex counts.
+   */
+  async lockOwnerUsage(orgId: string | null): Promise<ZoneUsage> {
+    await this.client.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`geo.zones.quota:${orgId ?? 'global'}`],
+    );
+    const [row] = await this.db
+      .select({
+        zones: count(),
+        vertices: sql<string>`coalesce(sum(${zones.vertexCount}), 0)`,
+      })
+      .from(zones)
+      .where(orgId === null ? isNull(zones.orgId) : eq(zones.orgId, orgId));
+    return { zones: row?.zones ?? 0, vertices: Number(row?.vertices ?? 0) };
   }
 
   /** Locks the zone with this code of the owner (`FOR UPDATE`), if any. */

@@ -20,8 +20,14 @@ import type {
   ZoneReadScope,
 } from '../../domain/zone.js';
 import type { GeometryValidity } from '../../domain/zone-errors.js';
-import type { ZoneGeometry } from '../../domain/zone-geometry.js';
+import {
+  geometryVertexCount,
+  type ZoneGeometry,
+} from '../../domain/zone-geometry.js';
+import type { ZoneUsage } from '../../domain/zone-quota.js';
+import { zoneEtag } from '../../domain/zone-version.js';
 import { GeoOutboxRelay } from '../outbox/geo-outbox.relay.js';
+import { PublicationLimits } from '../outbox/publication-limits.js';
 import { ZonesRepository } from './zones.repository.js';
 import { effectiveChanges, ZonesService } from './zones.service.js';
 
@@ -146,6 +152,19 @@ class InMemoryUnit {
     );
   }
 
+  lockOwnerUsage(orgId: string | null): Promise<ZoneUsage> {
+    const owned = [...this.store.zones.values()].filter(
+      (zone) => zone.orgId === orgId,
+    );
+    return Promise.resolve({
+      zones: owned.length,
+      vertices: owned.reduce(
+        (sum, zone) => sum + geometryVertexCount(zone.geometry),
+        0,
+      ),
+    });
+  }
+
   hasGeometry(id: string, geometry: ZoneGeometry): Promise<boolean> {
     return Promise.resolve(
       JSON.stringify(this.store.zones.get(id)?.geometry) ===
@@ -215,14 +234,19 @@ const audit = {
   },
 };
 
+/** Quotas of the tests: 3 zones and 20 vertices per owner. */
+const QUOTA = { ZONE_QUOTA_MAX_ZONES: 3, ZONE_QUOTA_MAX_VERTICES: 20 };
+
 describe('ZonesService', () => {
   let service: ZonesService;
   let repository: InMemoryZonesRepository;
   let notified: number;
+  let maxPayloadBytes: number;
 
   beforeEach(async () => {
     repository = new InMemoryZonesRepository();
     notified = 0;
+    maxPayloadBytes = 1024 * 1024;
     const moduleRef = await Test.createTestingModule({
       providers: [
         ZonesService,
@@ -236,8 +260,12 @@ describe('ZonesService', () => {
             },
           },
         },
+        {
+          provide: PublicationLimits,
+          useValue: { maxPayloadBytes: () => maxPayloadBytes },
+        },
         { provide: MetricsService, useValue: new MetricsService() },
-        { provide: APP_CONFIG, useValue: { ZONES_GEOJSON_MAX_FEATURES: 2 } },
+        { provide: APP_CONFIG, useValue: { SERVICE_NAME: 'geo', ...QUOTA } },
       ],
     }).compile();
     service = moduleRef.get(ZonesService);
@@ -466,22 +494,169 @@ describe('ZonesService', () => {
     ]);
   });
 
-  it('caps the map features and says so', async () => {
-    const admin = user(null, 'super_admin');
-    for (const code of ['m-1', 'm-2', 'm-3']) {
-      await service.create(createInput(code, true), admin);
+  it('refuses a zone beyond the owner quota of zones or vertices (409)', async () => {
+    const orgAdmin = user(ORG_A, 'org_admin');
+    for (const code of ['q-1', 'q-2', 'q-3']) {
+      await service.create(createInput(code), orgAdmin);
     }
-    const all = [...repository.zones.values()];
-    Object.assign(repository, {
-      features: (_filter: unknown, _scope: unknown, limit: number) =>
-        Promise.resolve(all.slice(0, limit)),
+    const outbox = repository.outbox.length;
+    await expect(
+      service.create(createInput('q-4'), orgAdmin),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: 'ZONE_QUOTA_EXCEEDED',
+      extra: { resource: 'zones', orgId: ORG_A, used: 3, limit: 3 },
     });
+    expect(repository.outbox).toHaveLength(outbox);
+    // Each owner has its own quota.
+    await expect(
+      service.create(createInput('q-4'), user(ORG_B, 'org_admin')),
+    ).resolves.toMatchObject({ orgId: ORG_B });
 
-    await expect(service.features({}, admin)).resolves.toMatchObject({
-      truncated: true,
-      limit: 2,
-      zones: all.slice(0, 2),
+    // 3 squares = 15 vertices: a 12-vertex ring instead of a 5-vertex one
+    // (+7) breaks the 20-vertex quota.
+    const [first] = [...repository.zones.values()].filter(
+      (zone) => zone.orgId === ORG_A,
+    );
+    const detailed: ZoneGeometry = {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [104, 1],
+          [104.02, 1],
+          [104.04, 1],
+          [104.06, 1],
+          [104.08, 1],
+          [104.1, 1],
+          [104.1, 1.05],
+          [104.1, 1.1],
+          [104.05, 1.1],
+          [104, 1.1],
+          [104, 1.05],
+          [104, 1],
+        ],
+      ],
+    };
+    await expect(
+      service.update(first?.id ?? '', { geometry: detailed }, orgAdmin),
+    ).rejects.toMatchObject({
+      code: 'ZONE_QUOTA_EXCEEDED',
+      extra: { resource: 'vertices', used: 15, requested: 7, limit: 20 },
     });
+    // A simpler geometry is always allowed.
+    await expect(
+      service.update(
+        first?.id ?? '',
+        {
+          geometry: {
+            type: 'Polygon',
+            coordinates: [
+              [
+                [104, 1],
+                [104.1, 1],
+                [104, 1.1],
+                [104, 1],
+              ],
+            ],
+          },
+        },
+        orgAdmin,
+      ),
+    ).resolves.toMatchObject({ id: first?.id });
+  });
+
+  it('applies If-Match: the current version passes, a stale one answers 412', async () => {
+    const orgAdmin = user(ORG_A, 'org_admin');
+    const zone = await service.create(createInput('etag'), orgAdmin);
+    const read = zoneEtag(zone);
+
+    const changed = await service.update(
+      zone.id,
+      { name: 'Renamed' },
+      orgAdmin,
+      undefined,
+      { kind: 'tags', tags: [read.slice(1, -1)] },
+    );
+    expect(zoneEtag(changed)).not.toBe(read);
+
+    // A second editor still holding the first version is refused.
+    const outbox = repository.outbox.length;
+    await expect(
+      service.update(
+        zone.id,
+        { properties: { note: 'B' } },
+        orgAdmin,
+        undefined,
+        {
+          kind: 'tags',
+          tags: [read.slice(1, -1)],
+        },
+      ),
+    ).rejects.toMatchObject({
+      status: 412,
+      code: 'ZONE_VERSION_CONFLICT',
+      extra: { id: zone.id, currentEtag: zoneEtag(changed) },
+    });
+    await expect(
+      service.remove(zone.id, orgAdmin, undefined, {
+        kind: 'tags',
+        tags: [read.slice(1, -1)],
+      }),
+    ).rejects.toMatchObject({ code: 'ZONE_VERSION_CONFLICT' });
+    expect(repository.outbox).toHaveLength(outbox);
+    expect(repository.zones.get(zone.id)?.name).toBe('Renamed');
+
+    await service.remove(zone.id, orgAdmin, undefined, { kind: 'any' });
+    expect(repository.zones.has(zone.id)).toBe(false);
+  });
+
+  it('refuses a zone whose snapshot the NATS server could never carry (422)', async () => {
+    maxPayloadBytes = 2048;
+    await expect(
+      service.create(
+        {
+          ...createInput('large'),
+          properties: { note: 'x'.repeat(1500) },
+        },
+        user(ORG_A, 'org_admin'),
+      ),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: 'ZONE_SNAPSHOT_TOO_LARGE',
+      extra: { maxBytes: 1024 },
+    });
+    expect(repository.zones.size).toBe(0);
+    expect(repository.outbox).toHaveLength(0);
+  });
+
+  it('refuses a geometry crossing the antimeridian (422), on create and update', async () => {
+    const orgAdmin = user(ORG_A, 'org_admin');
+    const crossing: ZoneGeometry = {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [179, 0],
+          [-179, 0],
+          [-179, 1],
+          [179, 1],
+          [179, 0],
+        ],
+      ],
+    };
+    await expect(
+      service.create(
+        { ...createInput('amer'), kind: 'mpa', geometry: crossing },
+        orgAdmin,
+      ),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: 'ZONE_GEOMETRY_CROSSES_ANTIMERIDIAN',
+      extra: { path: 'geometry.coordinates.0.0' },
+    });
+    const zone = await service.create(createInput('ok'), orgAdmin);
+    await expect(
+      service.update(zone.id, { geometry: crossing }, orgAdmin),
+    ).rejects.toMatchObject({ code: 'ZONE_GEOMETRY_CROSSES_ANTIMERIDIAN' });
   });
 
   it('applies seeds idempotently by code', async () => {

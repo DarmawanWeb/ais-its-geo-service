@@ -10,7 +10,9 @@ import {
   ZoneGeometryTypeNotAllowedError,
 } from './zone-errors.js';
 import {
+  assertNoAntimeridianCrossing,
   assertZoneGeometryRules,
+  findAntimeridianCrossing,
   geometryDimension,
   geometryVertexCount,
   parseZoneGeometry,
@@ -257,5 +259,141 @@ describe('geometry facts', () => {
       }),
     ).toBe(2);
     expect(zoneGeometryBBox(SQUARE)).toEqual([104, 1, 104.1, 1.1]);
+  });
+});
+
+describe('antimeridian rule', () => {
+  const crossingRings: [number, number][][] = [
+    [
+      [179, 0],
+      [-179, 0],
+      [-179, 1],
+      [179, 1],
+      [179, 0],
+    ],
+  ];
+  const squareRings: [number, number][][] = [
+    [
+      [104, 1],
+      [104.1, 1],
+      [104.1, 1.1],
+      [104, 1.1],
+      [104, 1],
+    ],
+  ];
+  const crossingPolygon = {
+    type: 'Polygon' as const,
+    coordinates: crossingRings,
+  };
+
+  it('finds the first edge spanning more than 180 degrees of longitude', () => {
+    expect(findAntimeridianCrossing(crossingPolygon)).toEqual({
+      from: [179, 0],
+      to: [-179, 0],
+      path: 'coordinates.0.0',
+    });
+    expect(
+      findAntimeridianCrossing({
+        type: 'MultiLineString',
+        coordinates: [
+          [
+            [104, 1],
+            [105, 1],
+          ],
+          [
+            [170, 0],
+            [175, 0],
+            [-175, 0],
+          ],
+        ],
+      }),
+    ).toMatchObject({ path: 'coordinates.1.1', from: [175, 0] });
+    expect(
+      findAntimeridianCrossing({
+        type: 'GeometryCollection',
+        geometries: [
+          {
+            type: 'LineString',
+            coordinates: [
+              [104, 1],
+              [105, 1],
+            ],
+          },
+          crossingPolygon,
+        ],
+      }),
+    ).toMatchObject({ path: 'geometries.1.coordinates.0.0' });
+    expect(
+      findAntimeridianCrossing({
+        type: 'MultiPolygon',
+        coordinates: [squareRings, crossingRings],
+      }),
+    ).toMatchObject({ path: 'coordinates.1.0.0' });
+  });
+
+  it('accepts geometries split at the antimeridian and long edges up to 180 degrees', () => {
+    const split: ZoneGeometry = {
+      type: 'MultiPolygon',
+      coordinates: [
+        [
+          [
+            [179, 0],
+            [180, 0],
+            [180, 1],
+            [179, 1],
+            [179, 0],
+          ],
+        ],
+        [
+          [
+            [-180, 0],
+            [-179, 0],
+            [-179, 1],
+            [-180, 1],
+            [-180, 0],
+          ],
+        ],
+      ],
+    };
+    expect(findAntimeridianCrossing(split)).toBeUndefined();
+    expect(
+      findAntimeridianCrossing({
+        type: 'LineString',
+        coordinates: [
+          [-90, 0],
+          [90, 0],
+        ],
+      }),
+    ).toBeUndefined();
+    // Points have no edges.
+    expect(
+      findAntimeridianCrossing({
+        type: 'MultiPoint',
+        coordinates: [
+          [179.9, 0],
+          [-179.9, 0],
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it('refuses a crossing geometry with 422 and a splitting hint', () => {
+    expect(() => {
+      assertNoAntimeridianCrossing(crossingPolygon);
+    }).toThrow(
+      expect.objectContaining({
+        status: 422,
+        code: 'ZONE_GEOMETRY_CROSSES_ANTIMERIDIAN',
+        detail: expect.stringContaining('spans 358° of longitude') as string,
+        extra: {
+          from: [179, 0],
+          to: [-179, 0],
+          path: 'geometry.coordinates.0.0',
+        },
+      }) as Error,
+    );
+    expect(() => {
+      assertNoAntimeridianCrossing(SQUARE);
+    }).not.toThrow();
   });
 });

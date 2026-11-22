@@ -4,17 +4,22 @@ import {
 } from '@darmawanweb/ais-its-contracts/domain';
 import { BBoxQueryDto, PageQueryDto } from '@darmawanweb/ais-its-nest/http';
 import { ApiPropertyOptional, IntersectionType } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsIn,
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
   Length,
+  Max,
+  Min,
 } from 'class-validator';
+
+import { MAP_MAX_ZOOM } from '../../../domain/zone-map.js';
 
 import {
   booleanQuery,
@@ -76,6 +81,21 @@ export class ListZonesQuery extends IntersectionType(
 
 /** Query of `GET /api/v2/zones/geojson` (the map layer). */
 export class ZoneGeoJsonQuery extends ZoneFilterQuery {
+  @ApiPropertyOptional({
+    type: Number,
+    minimum: 0,
+    maximum: MAP_MAX_ZOOM,
+    description:
+      'Map zoom level: geometries are simplified to half a pixel of it (ST_SimplifyPreserveTopology); full resolution when absent or >= 19',
+    example: 9,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(MAP_MAX_ZOOM)
+  readonly zoom?: number;
+
   @ApiPropertyOptional({
     type: Boolean,
     default: true,

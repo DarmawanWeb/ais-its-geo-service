@@ -234,6 +234,115 @@ describe('zones CRUD and input validation', () => {
     });
   });
 
+  it('versions zones with an ETag and refuses a stale If-Match (412)', async () => {
+    const created = await service.request('POST', ZONES, {
+      user: USERS.orgAdminA,
+      body: zoneBody({ properties: { note: 'base' } }),
+    });
+    expect(created.statusCode).toBe(201);
+    const id = idOf(created);
+    const version = created.headers.etag as string;
+    expect(version).toBe(
+      `"${created.json<{ updatedAt: string }>().updatedAt}"`,
+    );
+    const read = await service.request('GET', `${ZONES}/${id}`, {
+      user: USERS.viewerA,
+    });
+    expect(read.headers.etag).toBe(version);
+
+    // Editor A saves first, on the version both editors loaded.
+    const first = await service.request('PATCH', `${ZONES}/${id}`, {
+      user: USERS.orgAdminA,
+      headers: { 'if-match': version },
+      body: { properties: { note: 'A' } },
+    });
+    expect(first.statusCode).toBe(200);
+    const next = first.headers.etag as string;
+    expect(next).not.toBe(version);
+
+    // Editor B, still on the old version, is refused instead of overwriting A.
+    const stale = await service.request('PATCH', `${ZONES}/${id}`, {
+      user: USERS.orgAdminA,
+      headers: { 'if-match': version },
+      body: { properties: { unlocode: 'IDBTM' } },
+    });
+    expect(stale.statusCode).toBe(412);
+    expect(stale.headers['content-type']).toContain('application/problem+json');
+    expect(stale.json<Problem>()).toMatchObject({
+      code: 'ZONE_VERSION_CONFLICT',
+      currentEtag: next,
+    });
+    const kept = await service.request('GET', `${ZONES}/${id}`, {
+      user: USERS.orgAdminA,
+    });
+    expect(kept.json()).toMatchObject({ properties: { note: 'A' } });
+
+    const malformed = await service.request('DELETE', `${ZONES}/${id}`, {
+      user: USERS.orgAdminA,
+      headers: { 'if-match': 'not-a-tag' },
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json<Problem>()).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      errors: [expect.objectContaining({ field: 'If-Match' })],
+    });
+    const staleDelete = await service.request('DELETE', `${ZONES}/${id}`, {
+      user: USERS.orgAdminA,
+      headers: { 'if-match': version },
+    });
+    expect(staleDelete.statusCode).toBe(412);
+    const deleted = await service.request('DELETE', `${ZONES}/${id}`, {
+      user: USERS.orgAdminA,
+      headers: { 'if-match': next },
+    });
+    expect(deleted.statusCode).toBe(204);
+  });
+
+  it('refuses a geometry crossing the antimeridian with a splitting hint (422)', async () => {
+    const response = await service.request('POST', ZONES, {
+      user: USERS.orgAdminA,
+      body: zoneBody({
+        kind: 'mpa',
+        geometry: {
+          type: 'Polygon',
+          coordinates: [
+            [
+              [179, 0],
+              [-179, 0],
+              [-179, 1],
+              [179, 1],
+              [179, 0],
+            ],
+          ],
+        },
+      }),
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json<Problem>()).toMatchObject({
+      code: 'ZONE_GEOMETRY_CROSSES_ANTIMERIDIAN',
+      path: 'geometry.coordinates.0.0',
+      detail: expect.stringContaining('Split the geometry') as string,
+    });
+  });
+
+  it('counts refused writes by problem code, DTO validation included', async () => {
+    const invalidDto = await service.request('POST', ZONES, {
+      user: USERS.orgAdminA,
+      body: zoneBody({ code: 'Not A Slug' }),
+    });
+    expect(invalidDto.statusCode).toBe(400);
+    const metrics = await service.app.inject({
+      method: 'GET',
+      url: '/metrics',
+    });
+    expect(metrics.body).toMatch(
+      /aisits_geo_zone_rejections_total\{code="VALIDATION_FAILED"\} [1-9]/,
+    );
+    expect(metrics.body).toMatch(
+      /aisits_geo_zone_rejections_total\{code="ZONE_GEOMETRY_INVALID"\} [1-9]/,
+    );
+  });
+
   it('refuses a duplicate code of the same owner (409)', async () => {
     const code = zoneCode('dup');
     const first = await service.request('POST', ZONES, {

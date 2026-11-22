@@ -28,10 +28,13 @@ describe('configSchema', () => {
     });
   });
 
-  it('applies the geo defaults (body limit, map cap, outbox relay)', () => {
+  it('applies the geo defaults (body limit, map budgets, quotas, outbox relay)', () => {
     expect(load()).toMatchObject({
       HTTP_BODY_LIMIT_BYTES: 4 * 1024 * 1024,
       ZONES_GEOJSON_MAX_FEATURES: 5_000,
+      ZONES_GEOJSON_MAX_VERTICES: 250_000,
+      ZONE_QUOTA_MAX_ZONES: 1_000,
+      ZONE_QUOTA_MAX_VERTICES: 2_000_000,
       OUTBOX_RELAY_ENABLED: true,
       OUTBOX_POLL_INTERVAL_MS: 500,
       OUTBOX_BATCH_SIZE: 100,
@@ -43,6 +46,13 @@ describe('configSchema', () => {
       load({ OUTBOX_RELAY_ENABLED: 'false', OUTBOX_BATCH_SIZE: '10' }),
     ).toMatchObject({ OUTBOX_RELAY_ENABLED: false, OUTBOX_BATCH_SIZE: 10 });
     expect(() => load({ OUTBOX_BATCH_SIZE: '0' })).toThrow(
+      ConfigValidationError,
+    );
+    // One zone of 50 000 vertices must always fit a response and a quota.
+    expect(() => load({ ZONES_GEOJSON_MAX_VERTICES: '49999' })).toThrow(
+      ConfigValidationError,
+    );
+    expect(() => load({ ZONE_QUOTA_MAX_VERTICES: '49999' })).toThrow(
       ConfigValidationError,
     );
   });

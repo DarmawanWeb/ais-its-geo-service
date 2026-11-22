@@ -2,8 +2,9 @@ import 'reflect-metadata';
 
 import { loadConfig } from '@darmawanweb/ais-its-nest';
 import { PlatformRootModule } from '@darmawanweb/ais-its-nest/http';
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { Logger } from 'nestjs-pino';
+import { Logger as PinoLogger } from 'nestjs-pino';
 
 import { AppModule } from './app.module.js';
 import { configSchema } from './config.js';
@@ -23,7 +24,10 @@ const app = await NestFactory.createApplicationContext(
   // eslint-disable-next-line @typescript-eslint/no-unsafe-class-instance-assignment -- Nest declares its options as classes; plain objects are the documented usage
   { bufferLogs: true, abortOnError: false },
 );
-app.useLogger(app.get(Logger));
+app.useLogger(app.get(PinoLogger));
+// A context logger: nestjs-pino reads the last string argument as the
+// context, so the message goes before it (msg = "Seed finished").
+const logger = new Logger('Seed');
 try {
   await app.init();
   const results = await app.get(ZoneSeeder).seed(mode);
@@ -34,9 +38,10 @@ try {
       if ((await relay.relayOnce()).claimed === 0) break;
     }
   }
-  app
-    .get(Logger)
-    .log({ mode, zones: results }, `Seed finished (${results.length} zones)`);
+  logger.log(
+    { mode, zoneCount: results.length, zones: results },
+    'Seed finished',
+  );
 } finally {
   await app.close();
 }

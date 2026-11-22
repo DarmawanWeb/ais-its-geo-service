@@ -39,7 +39,11 @@ export interface TestService {
   request(
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     url: string,
-    options?: { user?: TestUser; body?: object },
+    options?: {
+      user?: TestUser;
+      body?: object;
+      headers?: Record<string, string>;
+    },
   ): Promise<TestResponse>;
   /** Empties the zones and the outbox (test files share the schema). */
   reset(): Promise<void>;
@@ -120,7 +124,7 @@ export async function startTestService(
       return app.inject({
         method,
         url,
-        headers,
+        headers: { ...headers, ...options.headers },
         ...(options.body === undefined ? {} : { payload: options.body }),
       });
     },

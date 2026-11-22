@@ -1,3 +1,5 @@
+import { Readable } from 'node:stream';
+
 import type { Paginated } from '@darmawanweb/ais-its-contracts/api';
 import {
   CurrentPrincipal,
@@ -11,6 +13,7 @@ import {
   Delete,
   Get,
   Header,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -19,35 +22,76 @@ import {
   Post,
   Query,
   Req,
+  Res,
+  StreamableFile,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiAcceptedResponse,
+  ApiConflictResponse,
   ApiCreatedResponse,
+  ApiHeader,
   ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiPreconditionFailedResponse,
   ApiProduces,
   ApiTags,
+  ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
-import type { FastifyRequest } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 
+import type { Zone } from '../../domain/zone.js';
+import { featureCollectionJson } from '../../domain/zone-map.js';
+import { parseIfMatch, zoneEtag } from '../../domain/zone-version.js';
 import { CreateZoneDto } from './dto/create-zone.dto.js';
 import { ListZonesQuery, ZoneGeoJsonQuery } from './dto/list-zones.query.js';
 import { UpdateZoneDto } from './dto/update-zone.dto.js';
 import { RepublishResultDto, ZoneDto, ZoneSummaryDto } from './dto/zone.dto.js';
 import { ZoneFeatureCollectionDto } from './dto/zone-feature-collection.dto.js';
+import { ZoneMapService } from './zone-map.service.js';
+import { ZoneRejectionsInterceptor } from './zone-rejections.interceptor.js';
 import { ZonesService } from './zones.service.js';
+
+/** Media type of the map layer (RFC 7946 §12). */
+const GEOJSON_MEDIA_TYPE = 'application/geo+json; charset=utf-8';
+
+/** OpenAPI description of the `ETag` response header. */
+const ETAG_HEADER = {
+  ETag: {
+    description:
+      'Version of the zone (the quoted updatedAt); send it in If-Match to change or delete exactly this version',
+    schema: { type: 'string', example: '"2026-11-21T10:00:00.123Z"' },
+  },
+};
+
+/** OpenAPI description of the optional `If-Match` request header. */
+const IF_MATCH_HEADER = {
+  name: 'If-Match',
+  required: false,
+  description:
+    'ETag of the version the change is based on (or *): answered with 412 ZONE_VERSION_CONFLICT when the zone changed since. Recommended for every editor (prevents lost updates)',
+};
+
+/** Sets the `ETag` of a zone on the response and returns the zone DTO. */
+function withEtag(reply: FastifyReply, zone: Zone): ZoneDto {
+  void reply.header('ETag', zoneEtag(zone));
+  return new ZoneDto(zone);
+}
 
 /**
  * Zones and geofences: `/api/v2/zones` (gateway route of the geo service,
  * spec §12). Reads need `zone:read`, writes `zone:write` (contracts
  * `ROLE_PERMISSIONS`); tenancy and the global-zone rules are enforced by
- * {@link ZonesService}.
+ * {@link ZonesService}, the map layer by {@link ZoneMapService}.
  */
 @ApiTags('zones')
 @Controller('zones')
 export class ZonesController {
-  constructor(private readonly zones: ZonesService) {}
+  constructor(
+    private readonly zones: ZonesService,
+    private readonly map: ZoneMapService,
+  ) {}
 
   @Get()
   @RequirePermissions('zone:read')
@@ -55,7 +99,7 @@ export class ZonesController {
     summary:
       'List zones (global + own organization; authority/super_admin: all)',
     description:
-      'Page-based list without geometries (use GET /zones/:id or /zones/geojson). bbox matches zones whose geometry intersects the box in lon/lat.',
+      'Page-based list without geometries (use GET /zones/:id or /zones/geojson). bbox matches zones whose area of effect (geometry and bufferM, e.g. the circle of a point zone) reaches the box in lon/lat.',
   })
   @ApiPageResponse(ZoneSummaryDto)
   async list(
@@ -81,28 +125,33 @@ export class ZonesController {
 
   @Get('geojson')
   @RequirePermissions('zone:read')
-  @Header('Content-Type', 'application/geo+json; charset=utf-8')
+  @Header('Content-Type', GEOJSON_MEDIA_TYPE)
   @ApiProduces('application/geo+json')
   @ApiOperation({
     summary: 'Visible zones as a GeoJSON FeatureCollection for the web map',
     description:
-      'Organization zones reach the map only here (the Martin tiles serve global zones). Active zones by default; coordinates rounded to 6 decimals.',
+      'Organization zones reach the map only here (the Martin tiles serve global zones). Active zones by default; geometries simplified for `zoom` and rounded to 6 decimals; at most ZONES_GEOJSON_MAX_FEATURES features and ZONES_GEOJSON_MAX_VERTICES vertices per response (`truncated`, `truncatedBy`). The response is streamed.',
   })
   @ApiOkResponse({ type: ZoneFeatureCollectionDto })
   async geojson(
     @Query() query: ZoneGeoJsonQuery,
     @CurrentPrincipal() principal: Principal,
-  ): Promise<ZoneFeatureCollectionDto> {
-    const set = await this.zones.features(
+  ): Promise<StreamableFile> {
+    const events = await this.map.layer(
       {
-        kinds: query.kind,
-        active: query.active,
-        bbox: bboxOf(query),
-        orgId: query.orgId,
+        filter: {
+          kinds: query.kind,
+          active: query.active,
+          bbox: bboxOf(query),
+          orgId: query.orgId,
+        },
+        zoom: query.zoom,
       },
       principal,
     );
-    return new ZoneFeatureCollectionDto(set);
+    return new StreamableFile(Readable.from(featureCollectionJson(events)), {
+      type: GEOJSON_MEDIA_TYPE,
+    });
   }
 
   @Post('republish')
@@ -127,52 +176,87 @@ export class ZonesController {
   @Get(':id')
   @RequirePermissions('zone:read')
   @ApiOperation({ summary: 'Get a zone with its geometry' })
-  @ApiOkResponse({ type: ZoneDto })
+  @ApiOkResponse({ type: ZoneDto, headers: ETAG_HEADER })
   async get(
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentPrincipal() principal: Principal,
+    @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<ZoneDto> {
-    return new ZoneDto(await this.zones.get(id, principal));
+    return withEtag(reply, await this.zones.get(id, principal));
   }
 
   @Post()
   @RequirePermissions('zone:write')
+  @UseInterceptors(ZoneRejectionsInterceptor)
   @ApiOperation({
     summary:
       'Create a zone (global: super_admin/authority; else in the active organization)',
   })
-  @ApiCreatedResponse({ type: ZoneDto })
+  @ApiCreatedResponse({ type: ZoneDto, headers: ETAG_HEADER })
+  @ApiConflictResponse({
+    description: 'ZONE_CODE_TAKEN or ZONE_QUOTA_EXCEEDED (problem details)',
+  })
+  @ApiUnprocessableEntityResponse({
+    description:
+      'ZONE_GEOMETRY_TYPE_NOT_ALLOWED, ZONE_GEOMETRY_TOO_COMPLEX, ZONE_BUFFER_REQUIRED, ZONE_GEOMETRY_CROSSES_ANTIMERIDIAN, ZONE_GEOMETRY_INVALID or ZONE_SNAPSHOT_TOO_LARGE (problem details)',
+  })
   async create(
     @Body() body: CreateZoneDto,
     @CurrentPrincipal() principal: Principal,
     @Req() request: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<ZoneDto> {
-    return new ZoneDto(await this.zones.create(body, principal, request));
+    return withEtag(reply, await this.zones.create(body, principal, request));
   }
 
   @Patch(':id')
   @RequirePermissions('zone:write')
-  @ApiOperation({ summary: 'Change a zone (geometry re-validated)' })
-  @ApiOkResponse({ type: ZoneDto })
+  @UseInterceptors(ZoneRejectionsInterceptor)
+  @ApiOperation({
+    summary: 'Change a zone (geometry re-validated)',
+    description:
+      'Send the ETag of the version you edited in If-Match: a zone changed since answers 412 ZONE_VERSION_CONFLICT instead of being overwritten.',
+  })
+  @ApiHeader(IF_MATCH_HEADER)
+  @ApiOkResponse({ type: ZoneDto, headers: ETAG_HEADER })
+  @ApiPreconditionFailedResponse({
+    description: 'ZONE_VERSION_CONFLICT: the zone changed since it was read',
+  })
+  @ApiConflictResponse({ description: 'ZONE_QUOTA_EXCEEDED' })
+  @ApiUnprocessableEntityResponse({
+    description: 'Geometry rules (see POST), ZONE_SNAPSHOT_TOO_LARGE',
+  })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: UpdateZoneDto,
+    @Headers('if-match') ifMatch: string | undefined,
     @CurrentPrincipal() principal: Principal,
     @Req() request: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<ZoneDto> {
-    return new ZoneDto(await this.zones.update(id, body, principal, request));
+    const precondition = parseIfMatch(ifMatch);
+    return withEtag(
+      reply,
+      await this.zones.update(id, body, principal, request, precondition),
+    );
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions('zone:write')
+  @UseInterceptors(ZoneRejectionsInterceptor)
   @ApiOperation({ summary: 'Delete a zone and publish its tombstone' })
+  @ApiHeader(IF_MATCH_HEADER)
   @ApiNoContentResponse()
+  @ApiPreconditionFailedResponse({
+    description: 'ZONE_VERSION_CONFLICT: the zone changed since it was read',
+  })
   async remove(
     @Param('id', new ParseUUIDPipe()) id: string,
+    @Headers('if-match') ifMatch: string | undefined,
     @CurrentPrincipal() principal: Principal,
     @Req() request: FastifyRequest,
   ): Promise<void> {
-    await this.zones.remove(id, principal, request);
+    await this.zones.remove(id, principal, request, parseIfMatch(ifMatch));
   }
 }
