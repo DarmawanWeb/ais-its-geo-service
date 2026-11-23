@@ -13,6 +13,7 @@ import {
   type ZoneGeometry,
   zoneGeometryBBox,
 } from '../../../domain/zone-geometry.js';
+import { zoneEtag } from '../../../domain/zone-version.js';
 import { GeoJsonGeometryDto } from './geojson-geometry.dto.js';
 
 /** A zone without its geometry (lists); dates as ISO-8601 UTC strings (spec §2). */
@@ -82,6 +83,13 @@ export class ZoneSummaryDto {
   @ApiProperty({ format: 'date-time' })
   readonly updatedAt: string;
 
+  @ApiProperty({
+    description:
+      'Version of the zone, the value of the ETag response header of GET /zones/:id and the writes: send it in If-Match on PATCH or DELETE to change exactly this version (412 ZONE_VERSION_CONFLICT otherwise). An opaque strong entity tag, quotes included; it changes with every change of the zone',
+    example: '"2026-11-21T10:00:00.123Z"',
+  })
+  readonly etag: string;
+
   @ApiProperty({ enum: GEOMETRY_TYPES })
   readonly geometryType: GeometryType;
 
@@ -112,6 +120,7 @@ export class ZoneSummaryDto {
     this.createdBy = zone.createdBy;
     this.createdAt = zone.createdAt.toISOString();
     this.updatedAt = zone.updatedAt.toISOString();
+    this.etag = zoneEtag(zone);
     this.geometryType = zone.geometryType;
     this.vertexCount = zone.vertexCount;
     this.bbox = [...zone.bbox];

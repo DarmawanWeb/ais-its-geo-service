@@ -169,12 +169,22 @@ describe('zone events through the outbox', () => {
       user: USERS.viewerA,
     });
     expect(viewer.statusCode).toBe(403);
+    // @RequirePlatformAdmin() answers before the permission check.
+    expect(viewer.json()).toMatchObject({ code: 'PLATFORM_ADMIN_REQUIRED' });
+    const orgAdmin = await service.request('POST', `${ZONES}/republish`, {
+      user: USERS.orgAdminA,
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(orgAdmin.statusCode).toBe(403);
+    expect(orgAdmin.json()).toMatchObject({ code: 'PLATFORM_ADMIN_REQUIRED' });
 
     const { rows } = await service.pool.query<{ zones: string }>(
       'SELECT count(*) AS zones FROM zones',
     );
+    // A bodiless POST with Content-Type: application/json is accepted (kit 0.3).
     const response = await service.request('POST', `${ZONES}/republish`, {
       user: USERS.superAdmin,
+      headers: { 'content-type': 'application/json' },
     });
     expect(response.statusCode).toBe(202);
     expect(response.json()).toEqual({ enqueued: Number(rows[0]?.zones) });

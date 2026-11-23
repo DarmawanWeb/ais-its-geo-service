@@ -75,17 +75,6 @@ export class OrganizationRequiredError extends ForbiddenError {
   }
 }
 
-/** `403 PLATFORM_ADMIN_REQUIRED`: the operation is reserved to `super_admin`. */
-export class PlatformAdminRequiredError extends ForbiddenError {
-  override readonly name = 'PlatformAdminRequiredError';
-
-  constructor(operation: string) {
-    super(`Only super_admin may ${operation}`, {
-      code: 'PLATFORM_ADMIN_REQUIRED',
-    });
-  }
-}
-
 /** `422 ZONE_GEOMETRY_TYPE_NOT_ALLOWED`: the geometry type does not fit the zone kind. */
 export class ZoneGeometryTypeNotAllowedError extends DomainError {
   override readonly name = 'ZoneGeometryTypeNotAllowedError';
@@ -173,12 +162,18 @@ export class ZoneGeometryCrossesAntimeridianError extends DomainError {
 export class ZoneSnapshotTooLargeError extends DomainError {
   override readonly name = 'ZoneSnapshotTooLargeError';
 
-  constructor(snapshotBytes: number, maxBytes: number) {
+  /**
+   * @param snapshotBytes - size of the event's NATS message (encoded
+   *   envelope plus the 1 KiB header allowance of the kit's `eventMessageSize`).
+   * @param maxBytes - the server's `max_payload`.
+   */
+  constructor(snapshotBytes: number, maxBytes: number, cause?: unknown) {
     super('ZONE_SNAPSHOT_TOO_LARGE', {
       status: 422,
       title: 'Zone too large to publish',
       detail: `The zone's snapshot event is ${snapshotBytes} bytes; the NATS server accepts messages of at most ${maxBytes} bytes. Simplify the geometry (fewer vertices) or reduce its properties, or ask the operator to raise the NATS max_payload (4 MB recommended)`,
       extra: { snapshotBytes, maxBytes },
+      cause,
     });
   }
 }

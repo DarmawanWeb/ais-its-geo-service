@@ -89,6 +89,11 @@ export interface ZoneFilter {
   readonly bbox?: BBox | undefined;
   /** Zones owned by this organization. */
   readonly orgId?: string | undefined;
+  /**
+   * `true`: global zones only (`org_id` NULL); `false`: organization zones
+   * only (within the read scope); absent: both.
+   */
+  readonly global?: boolean | undefined;
   /** Case-insensitive substring of the code or the name. */
   readonly search?: string | undefined;
 }

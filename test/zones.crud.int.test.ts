@@ -510,5 +510,10 @@ describe('zones CRUD and input validation', () => {
       user: USERS.superAdmin,
     });
     expect(malformed.statusCode).toBe(400);
+    // The kit's @UuidParam(): a field error on the path parameter.
+    expect(malformed.json()).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      errors: [expect.objectContaining({ field: 'id', code: 'isUuid' })],
+    });
   });
 });

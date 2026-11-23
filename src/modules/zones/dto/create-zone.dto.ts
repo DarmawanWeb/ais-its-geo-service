@@ -3,6 +3,7 @@ import {
   ZONE_MAX_VERTICES,
   type ZoneKind,
 } from '@darmawanweb/ais-its-contracts/domain';
+import { IsOptionalNotNull } from '@darmawanweb/ais-its-nest/http';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
@@ -19,7 +20,6 @@ import {
 } from 'class-validator';
 
 import { trimString } from '../../../common/transforms.js';
-import { IsOptionalNotNull } from '../../../common/validation.js';
 import { GeoJsonGeometryDto } from './geojson-geometry.dto.js';
 
 /** Zone codes: lowercase slugs such as `mvp-pipeline` or `idbtm.anchorage-a`. */

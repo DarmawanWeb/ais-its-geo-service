@@ -2,6 +2,7 @@ import {
   InjectPool,
   type Pool,
   type PoolClient,
+  sanitizeError,
   withTransaction,
 } from '@darmawanweb/ais-its-nest/db';
 import {
@@ -138,8 +139,9 @@ export class TilesGrants implements OnApplicationBootstrap {
         );
       }
     } catch (error) {
+      // Database errors without bound values (kit sanitizeError).
       this.logger.warn(
-        { error: error instanceof Error ? error.message : String(error) },
+        { err: sanitizeError(error) },
         'Could not check the tiles_ro grants (Martin may not read the zone tiles)',
       );
     }

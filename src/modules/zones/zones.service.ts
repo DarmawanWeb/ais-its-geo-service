@@ -5,25 +5,20 @@ import {
   type Paginated,
   toPaginated,
 } from '@darmawanweb/ais-its-contracts/api';
-import { isPlatformAdmin } from '@darmawanweb/ais-its-contracts/auth';
 import { newId, type ZoneKind } from '@darmawanweb/ais-its-contracts/domain';
-import {
-  type AuditRecordedV1,
-  EVENT_TYPES,
-} from '@darmawanweb/ais-its-contracts/events';
-import { InjectConfig } from '@darmawanweb/ais-its-nest';
-import {
-  type AuditEntry,
-  type AuditRequest,
-  AuditService,
-} from '@darmawanweb/ais-its-nest/audit';
+import { EVENT_TYPES } from '@darmawanweb/ais-its-contracts/events';
+import { DomainError, InjectConfig } from '@darmawanweb/ais-its-nest';
+import type { AuditEntry, AuditRequest } from '@darmawanweb/ais-its-nest/audit';
 import type { Principal } from '@darmawanweb/ais-its-nest/auth';
-import { MetricsService } from '@darmawanweb/ais-its-nest/metrics';
+import { isUniqueViolation } from '@darmawanweb/ais-its-nest/db';
+import {
+  type Counter,
+  MetricsService,
+} from '@darmawanweb/ais-its-nest/metrics';
+import { OutboxRelay } from '@darmawanweb/ais-its-nest/nats';
 import { Injectable, Logger } from '@nestjs/common';
-import type { Counter } from 'prom-client';
 
 import type { Config } from '../../config.js';
-import { isUniqueViolation } from '../../db/errors.js';
 import type {
   Zone,
   ZoneChanges,
@@ -33,7 +28,6 @@ import type {
 } from '../../domain/zone.js';
 import {
   type GeometryValidity,
-  PlatformAdminRequiredError,
   ZoneCodeTakenError,
   ZoneGeometryInvalidError,
   ZoneNotFoundError,
@@ -47,14 +41,10 @@ import {
   type ZoneGeometry,
 } from '../../domain/zone-geometry.js';
 import { parseZoneProperties } from '../../domain/zone-properties.js';
-import {
-  assertPublishable,
-  encodedSnapshotBytes,
-} from '../../domain/zone-publication.js';
+import { zonePublicationError } from '../../domain/zone-publication.js';
 import { assertZoneQuota, type ZoneQuota } from '../../domain/zone-quota.js';
 import { toZoneSnapshot, toZoneTombstone } from '../../domain/zone-snapshot.js';
 import { assertZoneVersion, type IfMatch } from '../../domain/zone-version.js';
-import { GeoOutboxRelay } from '../outbox/geo-outbox.relay.js';
 import { PublicationLimits } from '../outbox/publication-limits.js';
 import {
   assertOwnerFilter,
@@ -120,29 +110,49 @@ export type SeedMode = 'insert-missing' | 'update';
 /** Outcome of one seed zone. */
 export type SeedOutcome = 'created' | 'updated' | 'unchanged' | 'kept';
 
+/** A zone draft checked without saving (`POST /zones/validate`); geometry and properties are untrusted. */
+export interface ValidateZoneInput {
+  readonly kind: ZoneKind;
+  readonly geometry: unknown;
+  /** Default 0, as on create. */
+  readonly bufferM?: number | undefined;
+  /** Default `{}`, as on create (every property key is optional). */
+  readonly properties?: Readonly<Record<string, unknown>> | undefined;
+}
+
+/** Outcome of a dry-run validation of a zone draft. */
+export interface ZoneValidation {
+  /** The geometry as it would be stored (altitudes dropped); `null` when its structure is invalid. */
+  readonly geometry: ZoneGeometry | null;
+  /**
+   * The problem `POST /zones` would answer for the draft (the first rule it
+   * breaks, cheapest first: `400` structure or properties, `422` kind rules,
+   * vertex limit, buffer, antimeridian, PostGIS validity); `null` when valid.
+   */
+  readonly problem: DomainError | null;
+}
+
 /** Zones per transaction when republishing. */
 const REPUBLISH_BATCH_SIZE = 100;
 
 /**
  * Use cases of the zones registry (spec §13.6): tenancy, input validation
- * (GeoJSON, kind rules, antimeridian, PostGIS validity), optimistic
- * concurrency (`If-Match`), quotas per owner, and every change in one
- * transaction with its `geo.zone.*` event (refused when NATS could never
- * carry it) and its audit record in the outbox. Domain metric:
- * `aisits_geo_zone_changes_total{kind,action}` (refusals are counted by
- * `ZoneRejectionsInterceptor`).
+ * (GeoJSON, kind rules, antimeridian, PostGIS validity; also as a dry run),
+ * optimistic concurrency (`If-Match`), quotas per owner, and every change in
+ * one transaction with its `geo.zone.*` event (refused when NATS could never
+ * carry it) and its audit record in the outbox, published by the kit's
+ * `OutboxRelay`. Domain metric: `aisits_geo_zone_changes_total{kind,action}`
+ * (refusals are counted by `ZoneRejectionsInterceptor`).
  */
 @Injectable()
 export class ZonesService {
   private readonly logger = new Logger('ZonesService');
   private readonly changes: Counter<'kind' | 'action'>;
   private readonly quota: ZoneQuota;
-  private readonly serviceName: string;
 
   constructor(
     private readonly repository: ZonesRepository,
-    private readonly audit: AuditService,
-    private readonly relay: GeoOutboxRelay,
+    private readonly relay: OutboxRelay,
     private readonly limits: PublicationLimits,
     metrics: MetricsService,
     @InjectConfig() config: Config,
@@ -156,7 +166,6 @@ export class ZonesService {
       maxZones: config.ZONE_QUOTA_MAX_ZONES,
       maxVertices: config.ZONE_QUOTA_MAX_VERTICES,
     };
-    this.serviceName = config.SERVICE_NAME;
   }
 
   /** Creates a zone: global, or of the principal's active organization. */
@@ -179,11 +188,40 @@ export class ZonesService {
       source: input.source ?? null,
       createdBy: principal.kind === 'user' ? principal.id : null,
     });
-    const zone = await this.insert(draft, (created) =>
-      this.audit.buildRecord(createdEntry(created), principal, request),
+    const zone = await this.insert(
+      draft,
+      (created) => createdEntry(created),
+      principal,
+      request,
     );
     this.committed([zone.kind], 'create');
     return zone;
+  }
+
+  /**
+   * Checks a zone draft against the input rules of a create (README steps
+   * 2–8: GeoJSON structure and bounds, geometry type per kind, vertex limit,
+   * buffer of point zones, antimeridian, properties, PostGIS
+   * `ST_IsValidDetail`) without saving or publishing anything. Owner, quota,
+   * code, version and snapshot size are only checked by the write itself.
+   * A broken rule is the result, not an error; unexpected failures (e.g.
+   * the database) still throw.
+   */
+  async validate(input: ValidateZoneInput): Promise<ZoneValidation> {
+    let geometry: ZoneGeometry | null = null;
+    try {
+      geometry = parseZoneGeometry(input.geometry);
+      await this.checkDraftRules(
+        input.kind,
+        geometry,
+        input.bufferM ?? 0,
+        input.properties ?? {},
+      );
+      return { geometry, problem: null };
+    } catch (error) {
+      if (isDraftProblem(error)) return { geometry, problem: error };
+      throw error;
+    }
   }
 
   /** A zone visible to the principal, else `404 ZONE_NOT_FOUND`. */
@@ -249,17 +287,15 @@ export class ZonesService {
       await this.enqueueChange(
         unit,
         zone,
-        this.audit.buildRecord(
-          {
-            action: 'zone.update',
-            targetType: 'zone',
-            targetId: zone.id,
-            orgId: zone.orgId,
-            meta: { code: zone.code, kind: zone.kind, fields },
-          },
-          principal,
-          request,
-        ),
+        {
+          action: 'zone.update',
+          targetType: 'zone',
+          targetId: zone.id,
+          orgId: zone.orgId,
+          meta: { code: zone.code, kind: zone.kind, fields },
+        },
+        principal,
+        request,
       );
       return { zone, changed: true };
     });
@@ -289,19 +325,16 @@ export class ZonesService {
         EVENT_TYPES.GEO_ZONE_DELETED,
         toZoneTombstone(current),
       );
-      await unit.enqueue(
-        EVENT_TYPES.AUDIT_RECORDED,
-        this.audit.buildRecord(
-          {
-            action: 'zone.delete',
-            targetType: 'zone',
-            targetId: current.id,
-            orgId: current.orgId,
-            meta: { code: current.code, kind: current.kind },
-          },
-          principal,
-          request,
-        ),
+      await unit.enqueueAudit(
+        {
+          action: 'zone.delete',
+          targetType: 'zone',
+          targetId: current.id,
+          orgId: current.orgId,
+          meta: { code: current.code, kind: current.kind },
+        },
+        principal,
+        request,
       );
       return current;
     });
@@ -309,9 +342,10 @@ export class ZonesService {
   }
 
   /**
-   * Enqueues the current snapshot of every zone (`super_admin` only), e.g.
-   * after the `GEO` stream was lost or for a consumer that needs a full
-   * replay; {@link REPUBLISH_BATCH_SIZE} zones per transaction.
+   * Enqueues the current snapshot of every zone, e.g. after the `GEO`
+   * stream was lost or for a consumer that needs a full replay;
+   * {@link REPUBLISH_BATCH_SIZE} zones per transaction. Reserved to
+   * platform administrators by the route (`@RequirePlatformAdmin()`).
    *
    * @returns the number of snapshots enqueued.
    */
@@ -319,9 +353,6 @@ export class ZonesService {
     principal: Principal,
     request?: AuditRequest,
   ): Promise<number> {
-    if (!isPlatformAdmin(principal)) {
-      throw new PlatformAdminRequiredError('republish zone snapshots');
-    }
     let after: string | null = null;
     let enqueued = 0;
     for (;;) {
@@ -343,19 +374,16 @@ export class ZonesService {
       after = last;
     }
     await this.repository.transaction((unit) =>
-      unit.enqueue(
-        EVENT_TYPES.AUDIT_RECORDED,
-        this.audit.buildRecord(
-          {
-            action: 'zone.republish',
-            targetType: 'zone',
-            targetId: null,
-            orgId: null,
-            meta: { count: enqueued },
-          },
-          principal,
-          request,
-        ),
+      unit.enqueueAudit(
+        {
+          action: 'zone.republish',
+          targetType: 'zone',
+          targetId: null,
+          orgId: null,
+          meta: { count: enqueued },
+        },
+        principal,
+        request,
       ),
     );
     this.relay.notify();
@@ -406,17 +434,13 @@ export class ZonesService {
         });
       }
       const zone = await unit.update(current.id, all);
-      await this.enqueueChange(
-        unit,
-        zone,
-        this.audit.buildRecord({
-          action: 'zone.update',
-          targetType: 'zone',
-          targetId: zone.id,
-          orgId: null,
-          meta: { code: zone.code, kind: zone.kind, fields, seed: true },
-        }),
-      );
+      await this.enqueueChange(unit, zone, {
+        action: 'zone.update',
+        targetType: 'zone',
+        targetId: zone.id,
+        orgId: null,
+        meta: { code: zone.code, kind: zone.kind, fields, seed: true },
+      });
       return { zone, outcome: 'updated' as const };
     });
     if (existing !== undefined) {
@@ -425,12 +449,10 @@ export class ZonesService {
       }
       return existing;
     }
-    const zone = await this.insert(draft, (created) =>
-      this.audit.buildRecord({
-        ...createdEntry(created),
-        meta: { code: created.code, kind: created.kind, seed: true },
-      }),
-    );
+    const zone = await this.insert(draft, (created) => ({
+      ...createdEntry(created),
+      meta: { code: created.code, kind: created.kind, seed: true },
+    }));
     this.committed([zone.kind], 'create');
     return { zone, outcome: 'created' };
   }
@@ -451,11 +473,13 @@ export class ZonesService {
 
   /**
    * Inserts a validated zone with its snapshot and audit record, within
-   * the owner's quota.
+   * the owner's quota (system actor without `principal`).
    */
   private async insert(
     draft: ZoneDraft,
-    auditRecord: (zone: Zone) => AuditRecordedV1,
+    auditEntry: (zone: Zone) => AuditEntry,
+    principal?: Principal,
+    request?: AuditRequest,
   ): Promise<Zone> {
     try {
       return await this.repository.transaction(async (unit) => {
@@ -464,7 +488,13 @@ export class ZonesService {
           vertices: geometryVertexCount(draft.geometry),
         });
         const created = await unit.insert(newId(), draft);
-        await this.enqueueChange(unit, created, auditRecord(created));
+        await this.enqueueChange(
+          unit,
+          created,
+          auditEntry(created),
+          principal,
+          request,
+        );
         return created;
       });
     } catch (error) {
@@ -477,22 +507,26 @@ export class ZonesService {
 
   /**
    * Appends the snapshot and the audit record of a created or changed zone.
-   * The snapshot is measured first: one the NATS server could never carry
-   * rolls the transaction back (`422 ZONE_SNAPSHOT_TOO_LARGE`) instead of
-   * becoming a failed outbox row the detectors never see.
+   * The snapshot is measured against the NATS server's `max_payload` before
+   * its row is inserted (`enqueueEvent({ maxBytes })`): one the server could
+   * never carry rolls the transaction back with `422 ZONE_SNAPSHOT_TOO_LARGE`
+   * instead of becoming a parked outbox row the detectors never see.
    */
   private async enqueueChange(
     unit: ZoneUnitOfWork,
     zone: Zone,
-    auditRecord: AuditRecordedV1,
+    auditEntry: AuditEntry,
+    principal?: Principal,
+    request?: AuditRequest,
   ): Promise<void> {
-    const snapshot = toZoneSnapshot(zone);
-    assertPublishable(
-      encodedSnapshotBytes(snapshot, this.serviceName),
-      this.limits.maxPayloadBytes(),
-    );
-    await unit.enqueue(EVENT_TYPES.GEO_ZONE_UPSERTED, snapshot);
-    await unit.enqueue(EVENT_TYPES.AUDIT_RECORDED, auditRecord);
+    try {
+      await unit.enqueue(EVENT_TYPES.GEO_ZONE_UPSERTED, toZoneSnapshot(zone), {
+        maxBytes: this.limits.maxPayloadBytes(),
+      });
+    } catch (error) {
+      throw zonePublicationError(error);
+    }
+    await unit.enqueueAudit(auditEntry, principal, request);
   }
 
   /**
@@ -518,18 +552,39 @@ export class ZonesService {
 
   /**
    * A draft whose geometry and properties passed every input rule, cheapest
-   * first: GeoJSON structure (400), kind rules and vertex limit (422), the
-   * antimeridian (422), properties (400), then PostGIS validity (422).
+   * first: GeoJSON structure (400), then {@link checkDraftRules}.
    */
   private async validateDraft(
     draft: Omit<ZoneDraft, 'geometry'> & { readonly geometry: unknown },
   ): Promise<ZoneDraft> {
     const geometry = parseZoneGeometry(draft.geometry);
-    assertZoneGeometryRules(draft.kind, geometry, draft.bufferM);
-    assertNoAntimeridianCrossing(geometry);
-    const properties = parseZoneProperties(draft.kind, draft.properties);
-    await this.assertValid(geometry);
+    const properties = await this.checkDraftRules(
+      draft.kind,
+      geometry,
+      draft.bufferM,
+      draft.properties,
+    );
     return { ...draft, geometry, properties };
+  }
+
+  /**
+   * The input rules of a draft after its GeoJSON structure, cheapest first:
+   * kind rules and vertex limit (422), the antimeridian (422), properties
+   * (400), then PostGIS validity (422). Shared by the writes and the dry run.
+   *
+   * @returns the validated properties.
+   */
+  private async checkDraftRules(
+    kind: ZoneKind,
+    geometry: ZoneGeometry,
+    bufferM: number,
+    properties: Readonly<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>> {
+    assertZoneGeometryRules(kind, geometry, bufferM);
+    assertNoAntimeridianCrossing(geometry);
+    const parsed = parseZoneProperties(kind, properties);
+    await this.assertValid(geometry);
+    return parsed;
   }
 
   /**
@@ -549,6 +604,17 @@ export class ZonesService {
     const validity = await this.repository.checkValidity(geometry);
     if (!validity.valid) throw new ZoneGeometryInvalidError(validity);
   }
+}
+
+/**
+ * `true` for the problems of the draft input rules (400 structure or
+ * properties, 422 geometry rules); anything else is unexpected.
+ */
+function isDraftProblem(error: unknown): error is DomainError {
+  return (
+    error instanceof DomainError &&
+    (error.status === 400 || error.status === 422)
+  );
 }
 
 /** The audit entry of a created zone. */

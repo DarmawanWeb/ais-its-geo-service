@@ -7,9 +7,15 @@ import {
   type EventType,
 } from '@darmawanweb/ais-its-contracts/events';
 import { APP_CONFIG } from '@darmawanweb/ais-its-nest';
-import { type AuditEntry, AuditService } from '@darmawanweb/ais-its-nest/audit';
+import type { AuditEntry } from '@darmawanweb/ais-its-nest/audit';
 import { type Principal, UserPrincipal } from '@darmawanweb/ais-its-nest/auth';
 import { MetricsService } from '@darmawanweb/ais-its-nest/metrics';
+import {
+  type EnqueueEventOptions,
+  eventMessageSize,
+  EventTooLargeError,
+  OutboxRelay,
+} from '@darmawanweb/ais-its-nest/nats';
 import { Test } from '@nestjs/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -26,7 +32,6 @@ import {
 } from '../../domain/zone-geometry.js';
 import type { ZoneUsage } from '../../domain/zone-quota.js';
 import { zoneEtag } from '../../domain/zone-version.js';
-import { GeoOutboxRelay } from '../outbox/geo-outbox.relay.js';
 import { PublicationLimits } from '../outbox/publication-limits.js';
 import { ZonesRepository } from './zones.repository.js';
 import { effectiveChanges, ZonesService } from './zones.service.js';
@@ -207,32 +212,51 @@ class InMemoryUnit {
     return Promise.resolve();
   }
 
+  /** Like the kit's `enqueueEvent`: `maxBytes` refuses the row before it is written. */
   enqueue<Type extends EventType>(
     type: Type,
     data: EventPayload<Type>,
+    options: Pick<EnqueueEventOptions, 'maxBytes'> = {},
   ): Promise<string> {
+    if (options.maxBytes !== undefined) {
+      const size = eventMessageSize(type, data, { source: 'outbox' });
+      if (size > options.maxBytes) {
+        return Promise.reject(
+          new EventTooLargeError(type, size, options.maxBytes),
+        );
+      }
+    }
     this.store.outbox.push({ type, data });
     return Promise.resolve(`outbox-${this.store.outbox.length}`);
   }
+
+  /** Like the kit's `AuditService.enqueue`: the record of the entry in the outbox. */
+  enqueueAudit(entry: AuditEntry, principal?: Principal): Promise<string> {
+    return this.enqueue(
+      EVENT_TYPES.AUDIT_RECORDED,
+      auditRecord(entry, principal),
+    );
+  }
 }
 
-/** Builds audit records like the kit's `AuditService.buildRecord`. */
-const audit = {
-  buildRecord(entry: AuditEntry, principal?: Principal): AuditRecordedV1 {
-    return {
-      actorType: principal?.kind ?? 'system',
-      actorId: principal?.id ?? null,
-      orgId: entry.orgId ?? null,
-      action: entry.action,
-      targetType: entry.targetType ?? null,
-      targetId: entry.targetId ?? null,
-      ip: null,
-      userAgent: null,
-      meta: { ...(entry.meta ?? {}) },
-      at: '2026-01-01T00:00:00.000Z',
-    };
-  },
-};
+/** Audit records like the kit's `AuditService.buildRecord`. */
+function auditRecord(
+  entry: AuditEntry,
+  principal?: Principal,
+): AuditRecordedV1 {
+  return {
+    actorType: principal?.kind ?? 'system',
+    actorId: principal?.id ?? null,
+    orgId: entry.orgId ?? null,
+    action: entry.action,
+    targetType: entry.targetType ?? null,
+    targetId: entry.targetId ?? null,
+    ip: null,
+    userAgent: null,
+    meta: { ...(entry.meta ?? {}) },
+    at: '2026-01-01T00:00:00.000Z',
+  };
+}
 
 /** Quotas of the tests: 3 zones and 20 vertices per owner. */
 const QUOTA = { ZONE_QUOTA_MAX_ZONES: 3, ZONE_QUOTA_MAX_VERTICES: 20 };
@@ -251,9 +275,8 @@ describe('ZonesService', () => {
       providers: [
         ZonesService,
         { provide: ZonesRepository, useValue: repository },
-        { provide: AuditService, useValue: audit },
         {
-          provide: GeoOutboxRelay,
+          provide: OutboxRelay,
           useValue: {
             notify: () => {
               notified += 1;
@@ -475,23 +498,25 @@ describe('ZonesService', () => {
     });
   });
 
-  it('republishes every zone for super_admin only', async () => {
+  it('republishes every zone with one audit record (the route admits super_admin only)', async () => {
     await service.create(createInput('r-1'), user(ORG_A, 'org_admin'));
     await service.create(createInput('r-2', true), user(null, 'super_admin'));
     repository.outbox = [];
+    notified = 0;
 
-    await expect(
-      service.republish(user(ORG_A, 'authority')),
-    ).rejects.toMatchObject({
-      code: 'PLATFORM_ADMIN_REQUIRED',
-      status: 403,
-    });
     await expect(service.republish(user(null, 'super_admin'))).resolves.toBe(2);
     expect(repository.outbox.map((entry) => entry.type)).toEqual([
       EVENT_TYPES.GEO_ZONE_UPSERTED,
       EVENT_TYPES.GEO_ZONE_UPSERTED,
       EVENT_TYPES.AUDIT_RECORDED,
     ]);
+    expect(repository.outbox[2]?.data).toMatchObject({
+      action: 'zone.republish',
+      actorType: 'user',
+      targetId: null,
+      meta: { count: 2 },
+    });
+    expect(notified).toBeGreaterThan(0);
   });
 
   it('refuses a zone beyond the owner quota of zones or vertices (409)', async () => {
@@ -612,21 +637,135 @@ describe('ZonesService', () => {
 
   it('refuses a zone whose snapshot the NATS server could never carry (422)', async () => {
     maxPayloadBytes = 2048;
-    await expect(
-      service.create(
-        {
-          ...createInput('large'),
-          properties: { note: 'x'.repeat(1500) },
-        },
-        user(ORG_A, 'org_admin'),
-      ),
-    ).rejects.toMatchObject({
+    const refused = service.create(
+      {
+        ...createInput('large'),
+        properties: { note: 'x'.repeat(1500) },
+      },
+      user(ORG_A, 'org_admin'),
+    );
+    await expect(refused).rejects.toMatchObject({
       status: 422,
       code: 'ZONE_SNAPSHOT_TOO_LARGE',
-      extra: { maxBytes: 1024 },
+      extra: { maxBytes: 2048 },
     });
+    const problem = await refused.catch((error: unknown) => error);
+    expect(
+      (problem as { extra: { snapshotBytes: number } }).extra.snapshotBytes,
+    ).toBeGreaterThan(2048);
     expect(repository.zones.size).toBe(0);
     expect(repository.outbox).toHaveLength(0);
+
+    // The same zone fits a larger server; a later change that grows it does not.
+    maxPayloadBytes = 4096;
+    const zone = await service.create(
+      { ...createInput('fits'), properties: { note: 'x'.repeat(1500) } },
+      user(ORG_A, 'org_admin'),
+    );
+    const outbox = repository.outbox.length;
+    await expect(
+      service.update(
+        zone.id,
+        { properties: { note: 'x'.repeat(4000) } },
+        user(ORG_A, 'org_admin'),
+      ),
+    ).rejects.toMatchObject({ code: 'ZONE_SNAPSHOT_TOO_LARGE' });
+    expect(repository.outbox).toHaveLength(outbox);
+    expect(repository.zones.get(zone.id)?.properties).toEqual({
+      note: 'x'.repeat(1500),
+    });
+  });
+
+  describe('validate (dry run)', () => {
+    it('accepts a valid draft with the defaults of a create, writing nothing', async () => {
+      const result = await service.validate({
+        kind: 'restricted',
+        geometry: SQUARE,
+      });
+      expect(result).toEqual({ geometry: SQUARE, problem: null });
+      expect(repository.zones.size).toBe(0);
+      expect(repository.outbox).toHaveLength(0);
+      expect(notified).toBe(0);
+    });
+
+    it('returns the first broken rule as the problem a create would answer', async () => {
+      // 400: GeoJSON structure (no geometry to describe).
+      const unclosed = await service.validate({
+        kind: 'restricted',
+        geometry: {
+          type: 'Polygon',
+          coordinates: [
+            [
+              [104, 1],
+              [104.1, 1],
+              [104.1, 1.1],
+              [104, 1.1],
+            ],
+          ],
+        },
+      });
+      expect(unclosed.geometry).toBeNull();
+      expect(unclosed.problem).toMatchObject({
+        status: 400,
+        code: 'VALIDATION_FAILED',
+      });
+      expect(unclosed.problem?.errors?.[0]?.field).toMatch(/^geometry\./);
+
+      // 422: a point zone needs a buffer (bufferM defaults to 0).
+      const point = await service.validate({
+        kind: 'anchorage',
+        geometry: { type: 'Point', coordinates: [104, 1] },
+      });
+      expect(point.geometry).toEqual({ type: 'Point', coordinates: [104, 1] });
+      expect(point.problem).toMatchObject({
+        status: 422,
+        code: 'ZONE_BUFFER_REQUIRED',
+      });
+      await expect(
+        service.validate({
+          kind: 'anchorage',
+          geometry: { type: 'Point', coordinates: [104, 1] },
+          bufferM: 500,
+        }),
+      ).resolves.toMatchObject({ problem: null });
+
+      // 400: properties of the kind.
+      const properties = await service.validate({
+        kind: 'restricted',
+        geometry: SQUARE,
+        properties: { source: 'reserved' },
+      });
+      expect(properties.problem).toMatchObject({
+        status: 400,
+        errors: [expect.objectContaining({ field: 'properties.source' })],
+      });
+
+      // 422: PostGIS validity, with the reason and the location.
+      repository.validity = {
+        valid: false,
+        reason: 'Self-intersection',
+        location: [104.05, 1.05],
+      };
+      const invalid = await service.validate({
+        kind: 'restricted',
+        geometry: SQUARE,
+      });
+      expect(invalid.geometry).toEqual(SQUARE);
+      expect(invalid.problem).toMatchObject({
+        status: 422,
+        code: 'ZONE_GEOMETRY_INVALID',
+        extra: { reason: 'Self-intersection', location: [104.05, 1.05] },
+      });
+      expect(repository.outbox).toHaveLength(0);
+    });
+
+    it('lets unexpected failures through', async () => {
+      repository.checkValidity = () =>
+        Promise.reject(new Error('connection terminated'));
+      await expect(
+        service.validate({ kind: 'restricted', geometry: SQUARE }),
+      ).rejects.toThrow('connection terminated');
+    });
   });
 
   it('refuses a geometry crossing the antimeridian (422), on create and update', async () => {

@@ -1,12 +1,14 @@
 import { DomainError } from '@darmawanweb/ais-its-nest';
-import { MetricsService } from '@darmawanweb/ais-its-nest/metrics';
+import {
+  type Counter,
+  MetricsService,
+} from '@darmawanweb/ais-its-nest/metrics';
 import {
   type CallHandler,
   type ExecutionContext,
   Injectable,
   type NestInterceptor,
 } from '@nestjs/common';
-import type { Counter } from 'prom-client';
 import { catchError, type Observable, throwError } from 'rxjs';
 
 /**

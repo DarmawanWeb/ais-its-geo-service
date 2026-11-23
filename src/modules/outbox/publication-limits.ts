@@ -1,8 +1,5 @@
 import { InjectConfig } from '@darmawanweb/ais-its-nest';
-import {
-  NatsClient,
-  NatsNotConnectedError,
-} from '@darmawanweb/ais-its-nest/nats';
+import { NatsClient } from '@darmawanweb/ais-its-nest/nats';
 import {
   Injectable,
   Logger,
@@ -16,12 +13,13 @@ import {
 } from '../../domain/zone-publication.js';
 
 /**
- * The message size the connected NATS server accepts (`max_payload` of its
- * INFO), read by the zone writes to refuse snapshots that could never be
- * published (`422 ZONE_SNAPSHOT_TOO_LARGE`). At startup it warns when the
- * server cannot carry the largest zone the input rules allow, so operators
- * raise `max_payload` (the platform server uses 4 MB) instead of discovering
- * refused writes later.
+ * The message size the connected NATS server accepts (the kit's
+ * `NatsClient.maxPayloadBytes()`, the `max_payload` of its INFO), passed to
+ * `enqueueEvent({ maxBytes })` by the zone writes so that a snapshot that
+ * could never be published is refused with `422 ZONE_SNAPSHOT_TOO_LARGE`
+ * before anything is written. At startup it states whether the server
+ * carries the largest zone the input rules allow (about 1.6 MB): the kit
+ * warns below the platform's 4 MiB, this line names geo's own need.
  */
 @Injectable()
 export class PublicationLimits implements OnApplicationBootstrap {
@@ -37,19 +35,11 @@ export class PublicationLimits implements OnApplicationBootstrap {
 
   /**
    * `max_payload` of the server the client is (or was last) connected to,
-   * bytes; the NATS default (1 MiB) before the first connection.
+   * bytes; the NATS default (1 MiB) before the first connection, so an
+   * unknown limit never lets a larger snapshot through.
    */
   maxPayloadBytes(): number {
-    try {
-      return (
-        this.nats.connection.info?.max_payload ?? NATS_DEFAULT_MAX_PAYLOAD_BYTES
-      );
-    } catch (error) {
-      if (error instanceof NatsNotConnectedError) {
-        return NATS_DEFAULT_MAX_PAYLOAD_BYTES;
-      }
-      throw error;
-    }
+    return this.nats.maxPayloadBytes() ?? NATS_DEFAULT_MAX_PAYLOAD_BYTES;
   }
 
   /** Logs the limit once connected; warns when the largest valid zone would not fit. */

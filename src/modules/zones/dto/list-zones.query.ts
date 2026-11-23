@@ -17,15 +17,36 @@ import {
   Length,
   Max,
   Min,
+  type ValidationArguments,
+  ValidateBy,
 } from 'class-validator';
-
-import { MAP_MAX_ZOOM } from '../../../domain/zone-map.js';
 
 import {
   booleanQuery,
   listQuery,
   trimString,
 } from '../../../common/transforms.js';
+import { MAP_MAX_ZOOM } from '../../../domain/zone-map.js';
+
+/**
+ * Refuses `global=true` together with `orgId` (`400 VALIDATION_FAILED`,
+ * code `globalWithOrgId`): global zones belong to no organization, so the
+ * filter could only ever match nothing.
+ */
+function NotGlobalWithOrgId(): PropertyDecorator {
+  return ValidateBy({
+    name: 'globalWithOrgId',
+    validator: {
+      validate: (value: unknown, args?: ValidationArguments) =>
+        !(
+          value === true &&
+          (args?.object as { orgId?: unknown } | undefined)?.orgId !== undefined
+        ),
+      defaultMessage: () =>
+        'global=true cannot be combined with orgId (global zones have no organization)',
+    },
+  });
+}
 
 /** Filters shared by the list and the map endpoints. */
 export class ZoneFilterQuery extends BBoxQueryDto {
@@ -51,6 +72,17 @@ export class ZoneFilterQuery extends BBoxQueryDto {
   @IsOptional()
   @IsUUID()
   readonly orgId?: string;
+
+  @ApiPropertyOptional({
+    type: Boolean,
+    description:
+      'true = global zones only (shared by every organization); false = organization zones only (within what you may read: your own organization, or every organization for authority and super_admin); both when absent. global=true cannot be combined with orgId',
+  })
+  @IsOptional()
+  @Transform(booleanQuery)
+  @IsBoolean()
+  @NotGlobalWithOrgId()
+  readonly global?: boolean;
 }
 
 /** Query of `GET /api/v2/zones` (page-based list, spec §5). */

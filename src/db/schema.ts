@@ -74,7 +74,12 @@ export const zones = serviceSchema.table(
   ],
 );
 
-/** Transactional outbox (`0001_init.sql`), published by `GeoOutboxRelay`. */
+/**
+ * Transactional outbox (`0001_init.sql`, indexes of `0003_outbox_kit_relay.sql`),
+ * published by the kit's `OutboxRelay` in per-key mode (`seq`,
+ * `next_attempt_at`). `ordering_key` is deprecated (read only by the 0.1
+ * relay) and dropped by a later migration.
+ */
 export const outbox = serviceSchema.table(
   'outbox',
   {
@@ -101,13 +106,27 @@ export const outbox = serviceSchema.table(
   (table) => [
     pg.unique('outbox_seq_key').on(table.seq),
     pg
-      .index('outbox_pending_key_idx')
-      .on(table.orderingKey, table.seq)
+      .index('outbox_pending_idx')
+      .on(table.createdAt, table.id)
       .where(sql`published_at IS NULL AND failed_at IS NULL`),
     pg
       .index('outbox_pending_seq_idx')
       .on(table.seq)
       .where(sql`published_at IS NULL AND failed_at IS NULL`),
+    pg
+      .index('outbox_pending_key_idx')
+      .on(table.entityKey, table.seq)
+      .where(sql`published_at IS NULL AND failed_at IS NULL`),
+    pg
+      .index('outbox_retry_idx')
+      .on(table.entityKey, table.seq)
+      .where(
+        sql`published_at IS NULL AND failed_at IS NULL AND next_attempt_at IS NOT NULL`,
+      ),
+    pg
+      .index('outbox_failed_idx')
+      .on(table.failedAt)
+      .where(sql`failed_at IS NOT NULL`),
     pg
       .index('outbox_published_at_idx')
       .on(table.publishedAt)

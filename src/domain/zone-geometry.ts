@@ -32,9 +32,9 @@ import {
  * topological validity (`ST_IsValid`) needs PostGIS and is checked by the
  * zones repository; nothing here repairs a geometry.
  *
- * Methodology: these are input-validation rules of the platform, not a
- * catalogued analytic method (proposed catalog id `geo.zone_geometry_rules`,
- * see the README).
+ * Methodology: input-validation rules of the platform rather than an
+ * analytic method, catalogued as `geo.zone_geometry_rules` (tagged on
+ * {@link assertZoneGeometryRules}; see the README).
  *
  * @see https://www.rfc-editor.org/rfc/rfc7946 (GeoJSON, WGS84 lon/lat positions)
  * @see docs/PLATFORM_SPEC.md §13.6
@@ -303,8 +303,8 @@ export function findAntimeridianCrossing(
  * the globe. RFC 7946 §3.1.9 asks for such geometries to be cut at the
  * antimeridian; the client splits them, the service never does it silently.
  *
- * Methodology: a platform input-validation rule (proposed catalog id
- * `geo.zone_geometry_rules`, see the README), not an analytic method.
+ * Methodology: part of the input rules `geo.zone_geometry_rules` (see
+ * {@link assertZoneGeometryRules}).
  *
  * @see https://www.rfc-editor.org/rfc/rfc7946#section-3.1.9
  * @throws {ZoneGeometryCrossesAntimeridianError} `422 ZONE_GEOMETRY_CROSSES_ANTIMERIDIAN`
@@ -320,6 +320,11 @@ export function assertNoAntimeridianCrossing(geometry: ZoneGeometry): void {
  * 2. at most `maxVertices` vertices ({@link assertVertexLimit});
  * 3. point zones (dimension 0) have `bufferM > 0`.
  *
+ * The structure and bounds ({@link parseZoneGeometry}), the antimeridian
+ * ({@link assertNoAntimeridianCrossing}) and the PostGIS validity
+ * (`ST_IsValidDetail`, zones repository) complete the input rules.
+ *
+ * @method geo.zone_geometry_rules
  * @throws {ZoneGeometryTypeNotAllowedError} `422 ZONE_GEOMETRY_TYPE_NOT_ALLOWED`
  * @throws {ZoneGeometryTooComplexError} `422 ZONE_GEOMETRY_TOO_COMPLEX`
  * @throws {ZoneBufferRequiredError} `422 ZONE_BUFFER_REQUIRED`

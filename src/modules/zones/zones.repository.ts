@@ -1,9 +1,15 @@
 import { type PageQuery, pageOffset } from '@darmawanweb/ais-its-contracts/api';
+import type { BBox } from '@darmawanweb/ais-its-contracts/domain';
 import type {
   EventPayload,
   EventType,
 } from '@darmawanweb/ais-its-contracts/events';
-import type { BBox } from '@darmawanweb/ais-its-contracts/domain';
+import {
+  type AuditEntry,
+  type AuditRequest,
+  AuditService,
+} from '@darmawanweb/ais-its-nest/audit';
+import type { Principal } from '@darmawanweb/ais-its-nest/auth';
 import {
   bboxEnvelope,
   type Database,
@@ -15,7 +21,10 @@ import {
   type PoolClient,
   withTransaction,
 } from '@darmawanweb/ais-its-nest/db';
-import { enqueueEvent } from '@darmawanweb/ais-its-nest/nats';
+import {
+  type EnqueueEventOptions,
+  enqueueEvent,
+} from '@darmawanweb/ais-its-nest/nats';
 import { Injectable } from '@nestjs/common';
 import {
   and,
@@ -25,6 +34,7 @@ import {
   gt,
   ilike,
   inArray,
+  isNotNull,
   isNull,
   or,
   type SQL,
@@ -146,6 +156,11 @@ export function escapeLikePattern(value: string): string {
  * `0002_map_extent_quota_tiles.sql`), decides. Conservative: a zone at most
  * about 1 % (more near the poles) beyond its buffer may match; none whose
  * buffer reaches the box is missed.
+ *
+ * Units: `buffer_m` meters, the radius and the box degrees (WGS 84 lon/lat).
+ *
+ * @method geo.zone_buffer_extent
+ * @see migrations/0002_map_extent_quota_tiles.sql (`zone_buffer_degrees`, `zone_extent`)
  */
 export function bufferedBBoxCondition(bbox: BBox): SQL {
   const box = bboxEnvelope(bbox);
@@ -160,6 +175,12 @@ function scopeCondition(scope: ZoneReadScope): SQL | undefined {
     : or(isNull(zones.orgId), eq(zones.orgId, scope.orgId));
 }
 
+/** Global zones only (`true`), organization zones only (`false`), or both. */
+function ownerCondition(global: boolean | undefined): SQL | undefined {
+  if (global === undefined) return undefined;
+  return global ? isNull(zones.orgId) : isNotNull(zones.orgId);
+}
+
 function filterConditions(filter: ZoneFilter): (SQL | undefined)[] {
   const search =
     filter.search === undefined
@@ -172,6 +193,7 @@ function filterConditions(filter: ZoneFilter): (SQL | undefined)[] {
     filter.active === undefined ? undefined : eq(zones.active, filter.active),
     filter.bbox === undefined ? undefined : bufferedBBoxCondition(filter.bbox),
     filter.orgId === undefined ? undefined : eq(zones.orgId, filter.orgId),
+    ownerCondition(filter.global),
     search === undefined
       ? undefined
       : or(ilike(zones.code, search), ilike(zones.name, search)),
@@ -218,15 +240,16 @@ export class ZonesRepository {
   constructor(
     @InjectDb() private readonly db: Database<typeof schema>,
     @InjectPool() private readonly pool: Pool,
+    private readonly audit: AuditService,
   ) {}
 
   /**
-   * Runs `work` in one transaction: the zone writes and their outbox rows
-   * commit or roll back together.
+   * Runs `work` in one transaction: the zone writes, their events and their
+   * audit records (outbox rows) commit or roll back together.
    */
   transaction<T>(work: (unit: ZoneUnitOfWork) => Promise<T>): Promise<T> {
     return withTransaction(this.pool, (client) =>
-      work(new ZoneUnitOfWork(client)),
+      work(new ZoneUnitOfWork(client, this.audit)),
     );
   }
 
@@ -397,13 +420,17 @@ export class ZonesRepository {
 
 /**
  * Writes of one transaction: zone rows locked, inserted, updated or
- * deleted, and the events of the change appended to the outbox with the
- * same client (kit `enqueueEvent`), so they commit atomically.
+ * deleted, and the events and audit records of the change appended to the
+ * outbox with the same client (kit `enqueueEvent` and `AuditService.enqueue`),
+ * so they commit atomically.
  */
 export class ZoneUnitOfWork {
   private readonly db: Database<typeof schema>;
 
-  constructor(private readonly client: PoolClient) {
+  constructor(
+    private readonly client: PoolClient,
+    private readonly audit: AuditService,
+  ) {
     this.db = drizzle({ client, schema });
   }
 
@@ -543,15 +570,34 @@ export class ZoneUnitOfWork {
 
   /**
    * Appends an event to the outbox in this transaction; the payload is
-   * validated against the contracts schema now (`InvalidEventError`).
+   * validated against the contracts schema now (`InvalidEventError`). With
+   * `maxBytes` (the NATS `max_payload`), an event whose message would be
+   * larger throws `EventTooLargeError` before the row is inserted.
    *
    * @returns the envelope id (= `Nats-Msg-Id`).
    */
   enqueue<Type extends EventType>(
     type: Type,
     data: EventPayload<Type>,
+    options: Pick<EnqueueEventOptions, 'maxBytes'> = {},
   ): Promise<string> {
-    return enqueueEvent(this.client, type, data);
+    return enqueueEvent(this.client, type, data, options);
+  }
+
+  /**
+   * Appends the `audit.recorded.v1` record of an entry to the outbox in
+   * this transaction (kit `AuditService.enqueue`): published on
+   * `audit.v1.<SERVICE_NAME>` after the commit, never when it rolls back.
+   * Without a principal the actor is the system (seeds).
+   *
+   * @returns the envelope id.
+   */
+  enqueueAudit(
+    entry: AuditEntry,
+    principal?: Principal,
+    request?: AuditRequest,
+  ): Promise<string> {
+    return this.audit.enqueue(this.client, entry, principal, request);
   }
 }
 

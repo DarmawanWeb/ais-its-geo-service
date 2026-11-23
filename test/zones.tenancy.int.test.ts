@@ -122,6 +122,75 @@ describe('zones tenancy', () => {
     ]);
   });
 
+  it('filters global (global=true) or organization zones (global=false) within the read scope', async () => {
+    const globalIds = [ids['global-admin'], ids['global-authority']].sort();
+    for (const user of [USERS.viewerA, USERS.authority, USERS.superAdmin]) {
+      expect(await visibleIds(user, '&global=true')).toEqual(globalIds);
+    }
+    expect(await visibleIds(USERS.viewerA, '&global=false')).toEqual([
+      ids['org-a'],
+    ]);
+    expect(await visibleIds(USERS.authority, '&global=false')).toEqual(
+      [ids['org-a'], ids['org-b']].sort(),
+    );
+    expect(
+      await visibleIds(USERS.authority, `&global=false&orgId=${ORG_B}`),
+    ).toEqual([ids['org-b']]);
+    expect(
+      await visibleIds({ roles: ['viewer'], orgId: null }, '&global=false'),
+    ).toEqual([]);
+
+    const map = await service.request('GET', `${ZONES}/geojson?global=false`, {
+      user: USERS.authority,
+    });
+    expect(
+      map
+        .json<{ features: { id: string }[] }>()
+        .features.map((feature) => feature.id)
+        .sort(),
+    ).toEqual([ids['org-a'], ids['org-b']].sort());
+
+    const contradiction = await service.request(
+      'GET',
+      `${ZONES}?global=true&orgId=${ORG_A}`,
+      { user: USERS.authority },
+    );
+    expect(contradiction.statusCode).toBe(400);
+    expect(contradiction.json()).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      errors: [expect.objectContaining({ field: 'global' })],
+    });
+  });
+
+  it('gives list rows the version ETag and If-Match use', async () => {
+    const list = await service.request('GET', `${ZONES}?pageSize=100`, {
+      user: USERS.orgAdminA,
+    });
+    const row = list
+      .json<{ data: (Summary & { etag: string; updatedAt: string })[] }>()
+      .data.find((zone) => zone.id === ids['org-a']);
+    expect(row?.etag).toBe(`"${row?.updatedAt ?? ''}"`);
+    const read = await service.request(
+      'GET',
+      `${ZONES}/${ids['org-a'] ?? ''}`,
+      { user: USERS.orgAdminA },
+    );
+    expect(read.headers.etag).toBe(row?.etag);
+    expect(read.json()).toMatchObject({ etag: row?.etag });
+    const patched = await service.request(
+      'PATCH',
+      `${ZONES}/${ids['org-a'] ?? ''}`,
+      {
+        user: USERS.orgAdminA,
+        headers: { 'if-match': row?.etag ?? '' },
+        body: { name: 'Renamed from the list' },
+      },
+    );
+    expect(patched.statusCode).toBe(200);
+    expect(patched.headers.etag).toBe(patched.json<{ etag: string }>().etag);
+    expect(patched.headers.etag).not.toBe(row?.etag);
+  });
+
   it('hides other organizations: 404 on read, 403 on an owner filter', async () => {
     const read = await service.request(
       'GET',

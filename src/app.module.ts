@@ -10,6 +10,7 @@ import { GeoOutboxModule } from './modules/outbox/outbox.module.js';
 import { SeedModule } from './modules/seed/seed.module.js';
 import { TilesModule } from './modules/tiles/tiles.module.js';
 import { ZonesModule } from './modules/zones/zones.module.js';
+import { MIGRATIONS_DIR } from './service.js';
 
 /**
  * Root module. `bootstrapService()` wraps it in the kit's platform root module
@@ -19,16 +20,18 @@ import { ZonesModule } from './modules/zones/zones.module.js';
  */
 @Module({
   imports: [
-    // pg pool + drizzle (search_path=<DATABASE_SCHEMA>,public); migrations on boot.
-    DatabaseModule.forRoot({ schema }),
+    // pg pool + drizzle (search_path=<DATABASE_SCHEMA>,public); migrations on boot
+    // from this package's migrations/ (not the working directory).
+    DatabaseModule.forRoot({ schema, migrationsDir: MIGRATIONS_DIR }),
     // Streams this service PRODUCES to (created / widened at boot): the zone
     // snapshots (GEO, compacted: one message per zone) and its audit records.
     NatsModule.forRoot({ streams: ['GEO', 'AUDIT'] }),
     // Global default-deny guard: every route needs a principal unless @Public().
     // No route accepts API keys, so key introspection is off.
     AuthModule.forRoot({ apiKeys: false }),
-    // Builds the audit.recorded.v1 records (written through the outbox).
+    // audit.recorded.v1 records, written through the outbox (AuditService.enqueue).
     AuditModule,
+    // The kit's transactional outbox relay (per-key) and the NATS publication limits.
     GeoOutboxModule,
     ZonesModule,
     SeedModule,

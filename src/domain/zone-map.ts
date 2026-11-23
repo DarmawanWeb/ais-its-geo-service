@@ -13,8 +13,9 @@ import {
  *   id) within both budgets, and says when and why it was cut;
  * - it is produced and sent chunk by chunk, so memory does not grow with it.
  *
- * Methodology: cartographic display rules of the platform, not analytic
- * methods (proposed catalog id `geo.map_simplification`, see the README).
+ * Methodology: cartographic display rules of the platform, catalogued as
+ * `geo.map_simplification` (see {@link simplificationToleranceDeg} and the
+ * README).
  */
 
 /** Decimal digits of the map coordinates (1e-6° ≈ 0.11 m). */
@@ -41,6 +42,7 @@ export const MAP_SIMPLIFICATION_PX = 0.5;
  * @param zoom - map zoom level (0–24); absent = full resolution.
  * @returns 0 (no simplification) without a zoom, or when the tolerance is
  *   below the {@link MAP_GEOMETRY_DIGITS}-decimal rounding (zoom ≥ 19).
+ * @method geo.map_simplification
  * @see https://maplibre.org/maplibre-style-spec/sources/ (512-px vector tiles)
  * @see https://postgis.net/docs/ST_SimplifyPreserveTopology.html
  */

@@ -1,12 +1,18 @@
 import { Readable } from 'node:stream';
 
 import type { Paginated } from '@darmawanweb/ais-its-contracts/api';
+import { toProblemResponse } from '@darmawanweb/ais-its-nest';
 import {
   CurrentPrincipal,
   type Principal,
   RequirePermissions,
+  RequirePlatformAdmin,
 } from '@darmawanweb/ais-its-nest/auth';
-import { ApiPageResponse, bboxOf } from '@darmawanweb/ais-its-nest/http';
+import {
+  ApiPageResponse,
+  bboxOf,
+  UuidParam,
+} from '@darmawanweb/ais-its-nest/http';
 import {
   Body,
   Controller,
@@ -16,8 +22,6 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
-  Param,
-  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -47,6 +51,7 @@ import { parseIfMatch, zoneEtag } from '../../domain/zone-version.js';
 import { CreateZoneDto } from './dto/create-zone.dto.js';
 import { ListZonesQuery, ZoneGeoJsonQuery } from './dto/list-zones.query.js';
 import { UpdateZoneDto } from './dto/update-zone.dto.js';
+import { ValidateZoneDto, ZoneValidationDto } from './dto/validate-zone.dto.js';
 import { RepublishResultDto, ZoneDto, ZoneSummaryDto } from './dto/zone.dto.js';
 import { ZoneFeatureCollectionDto } from './dto/zone-feature-collection.dto.js';
 import { ZoneMapService } from './zone-map.service.js';
@@ -77,6 +82,11 @@ const IF_MATCH_HEADER = {
 function withEtag(reply: FastifyReply, zone: Zone): ZoneDto {
   void reply.header('ETag', zoneEtag(zone));
   return new ZoneDto(zone);
+}
+
+/** The request path without its query string (`ProblemDetails.instance`). */
+function pathOf(request: FastifyRequest): string {
+  return request.url.split('?', 1)[0] ?? request.url;
 }
 
 /**
@@ -112,6 +122,7 @@ export class ZonesController {
         active: query.active,
         bbox: bboxOf(query),
         orgId: query.orgId,
+        global: query.global,
         search: query.search,
       },
       { page: query.page, pageSize: query.pageSize },
@@ -144,6 +155,7 @@ export class ZonesController {
           active: query.active,
           bbox: bboxOf(query),
           orgId: query.orgId,
+          global: query.global,
         },
         zoom: query.zoom,
       },
@@ -157,6 +169,7 @@ export class ZonesController {
   @Post('republish')
   @HttpCode(HttpStatus.ACCEPTED)
   @RequirePermissions('zone:write')
+  @RequirePlatformAdmin()
   @ApiOperation({
     summary:
       'Republish the snapshot of every zone to the GEO stream (super_admin)',
@@ -173,12 +186,38 @@ export class ZonesController {
     );
   }
 
+  @Post('validate')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('zone:write')
+  @ApiOperation({
+    summary: 'Check a zone draft against the input rules without saving it',
+    description:
+      'Dry run of the input rules of POST /zones (README steps 2-8), for editors while drawing: GeoJSON structure and WGS84 bounds, geometry type per kind, at most 50 000 vertices, bufferM > 0 for point zones, no edge across the antimeridian, properties of the kind, PostGIS ST_IsValidDetail. Nothing is stored or published. A broken rule answers 200 with valid=false and problem = the problem details POST /zones would answer (e.g. ZONE_GEOMETRY_INVALID with reason and location [lon, lat] of a self-intersection). Owner, quota, code, If-Match and snapshot size are checked by the write only. A malformed body (kind or geometry missing, bufferM out of range) answers 400 VALIDATION_FAILED.',
+  })
+  @ApiOkResponse({ type: ZoneValidationDto })
+  async validate(
+    @Body() body: ValidateZoneDto,
+    @Req() request: FastifyRequest,
+  ): Promise<ZoneValidationDto> {
+    const { geometry, problem } = await this.zones.validate(body);
+    return new ZoneValidationDto(
+      geometry,
+      problem === null
+        ? null
+        : toProblemResponse(problem, {
+            instance: pathOf(request),
+            requestId: request.id,
+            exposeInternalErrors: false,
+          }).body,
+    );
+  }
+
   @Get(':id')
   @RequirePermissions('zone:read')
   @ApiOperation({ summary: 'Get a zone with its geometry' })
   @ApiOkResponse({ type: ZoneDto, headers: ETAG_HEADER })
   async get(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @UuidParam() id: string,
     @CurrentPrincipal() principal: Principal,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<ZoneDto> {
@@ -227,7 +266,7 @@ export class ZonesController {
     description: 'Geometry rules (see POST), ZONE_SNAPSHOT_TOO_LARGE',
   })
   async update(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @UuidParam() id: string,
     @Body() body: UpdateZoneDto,
     @Headers('if-match') ifMatch: string | undefined,
     @CurrentPrincipal() principal: Principal,
@@ -252,7 +291,7 @@ export class ZonesController {
     description: 'ZONE_VERSION_CONFLICT: the zone changed since it was read',
   })
   async remove(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @UuidParam() id: string,
     @Headers('if-match') ifMatch: string | undefined,
     @CurrentPrincipal() principal: Principal,
     @Req() request: FastifyRequest,

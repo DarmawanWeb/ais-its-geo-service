@@ -9,4 +9,13 @@ export const IMPLEMENTED_METHOD_IDS: readonly string[] = [
   'data.pipeline_route',
   // Seed zone kind transhipment_area from legacy data/batam.json (same file).
   'data.batam_area',
+  // Geometry input rules: type per kind, vertex limit, buffer of point zones,
+  // antimeridian, ST_IsValidDetail (src/domain/zone-geometry.ts#assertZoneGeometryRules).
+  'geo.zone_geometry_rules',
+  // Conservative buffer radius in degrees of the bbox filters
+  // (src/modules/zones/zones.repository.ts#bufferedBBoxCondition, SQL zone_buffer_degrees).
+  'geo.zone_buffer_extent',
+  // Map layer simplification tolerance and budgets
+  // (src/domain/zone-map.ts#simplificationToleranceDeg).
+  'geo.map_simplification',
 ];
